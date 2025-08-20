@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ mako-dev ]
+  workflow_dispatch:
+
+# Cancel superseded runs when you push new commits to the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: self-hosted 
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # if you use submodules (e.g., third-party libs)
+
+      - name: Show where I'm running
+        run: |
+          pwd
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "RUNNER_TEMP=$RUNNER_TEMP"
+          echo "RUNNER_TOOL_CACHE=$RUNNER_TOOL_CACHE"
+
+      - name: Run tests (script)
+        if: always()
+        run: |
+          if [ -x ./ci/ci.sh ]; then
+            ./ci/ci.sh
+          else
+            echo "ci/ci.sh not found"
+          fi
