@@ -16,9 +16,9 @@ namespace sync_util {
         // initialize it in the benchmarks/common3.h
         // latest timestamp for each local Paxos stream
         // Please, we can keep this as vector
-        static vector<std::atomic<uint32_t>> local_timestamp_;
+        static vector<std::atomic<uint32_t>> local_timestamp_; // timestamp*10+epoch
         // Single watermark for the entire system
-        static std::atomic<uint32_t> single_watermark_;
+        static std::atomic<uint32_t> single_watermark_; // timestamp*10+epoch
         
         static std::chrono::time_point<std::chrono::high_resolution_clock> last_update;
         static int shardIdx;
@@ -168,6 +168,11 @@ namespace sync_util {
            return single_watermark_.load(memory_order_acquire);  // timestamp*10+epoch
         }
 
+        static uint32_t retrieveShardW_relaxed() {
+           // Return single watermark
+           return single_watermark_.load(memory_order_relaxed);  // timestamp*10+epoch
+        }
+
         // detached thread to advance local watermark on the current shard
         // there are two ways to advance watermarks: (1) periodically exchange; (2) piggyback in the RPCs in transaction execution
         static void advancer() {
@@ -187,14 +192,17 @@ namespace sync_util {
                 }
                 
                 std::this_thread::sleep_for(std::chrono::microseconds(1 * 1000));
-                // if (counter % 200 == 0) {
-                //      Warning("watermark update: %llu, shardIdx: %d, watermark: %llu", 
-                //              min_so_far, shardIdx, 
-                //              single_watermark_.load(memory_order_acquire));
-                //     Warning("local-w: %llu, %llu, %llu, %llu, %llu, %llu, %llu, %llu",
-                //             local_timestamp_[0].load(),local_timestamp_[1].load(),local_timestamp_[2].load(),local_timestamp_[3].load(),
-                //             local_timestamp_[4].load(),local_timestamp_[5].load(),local_timestamp_[6].load(),local_timestamp_[7].load());
-                // }
+                /*if (counter % 200 == 0) {
+                     Warning("watermark update: %u, shardIdx: %d, watermark: %llu", 
+                             min_so_far, shardIdx, 
+                             single_watermark_.load(memory_order_acquire));
+                    std::string local_w_msg = "local-w: ";
+                    for (int i = 0; i < nthreads; i++) {
+                        local_w_msg += std::to_string(local_timestamp_[i].load(memory_order_relaxed));
+                        if (i < nthreads - 1) local_w_msg += ", ";
+                    }
+                    Warning("%s", local_w_msg.c_str());
+                }*/
             }
         }
 

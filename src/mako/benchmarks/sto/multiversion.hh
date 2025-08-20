@@ -42,37 +42,59 @@ public:
         return ret;
     }
 
-    // lazyReclaim goes after write not read, because two read threads might contend on the same key
-    // 1) if a node is deleted, then free all nodes following it; 
-    // 2) find the first safe version (<=watermark) and reclaim all versions after it (always stay at the same term)
-    // facts: even free it frequently, the jemalloc would release it back to OS if memory is sufficient;
+    // Lazy reclamation with optimized watermark checking
+    // Reclaims old versions that are safe to delete (below watermark)
     static void lazyReclaim(uint32_t time_term, uint32_t current_term, srolis::Node *root) {
-        return ;
+        // Use TThread counter for thread-local reclamation frequency
         TThread::incr_counter();
-        if (TThread::counter()%10!=0) return;
-
-        srolis::Node *next;
-        char * data;
-        int16_t data_size;
-
-        uint32_t watermark = sync_util::sync_logger::retrieveShardW()/10;
-        uint32_t *tt;
-        while (time_term/10>=watermark && root->data_size>0) {
-            next = reinterpret_cast<srolis::Node *>(root->data+root->data_size-srolis::BITS_OF_NODE);
-            tt = reinterpret_cast<uint32_t *>(root->data+root->data_size-srolis::EXTRA_BITS_FOR_VALUE);
-            time_term = *tt;
-            root = next;
+        if (TThread::counter() % 50 != 0) return;
+        
+        // Cache watermark with proper memory ordering
+        uint32_t watermark = sync_util::sync_logger::retrieveShardW_relaxed() / 10;
+        if (watermark == 0) return;  // Skip if watermark not initialized
+        
+        // Phase 1: Find the safe reclamation point
+        srolis::Node *safe_point = nullptr;
+        srolis::Node *current = root;
+        std::vector<srolis::Node*> to_free;  // Batch freeing for efficiency
+        
+        // Navigate to first version below watermark
+        while (current && current->data_size > 0) {
+            uint32_t *tt = reinterpret_cast<uint32_t*>(
+                current->data + current->data_size - srolis::EXTRA_BITS_FOR_VALUE);
+            
+            if ((*tt) / 10 < watermark) {
+                safe_point = current;
+                break;
+            }
+            
+            current = reinterpret_cast<srolis::Node*>(
+                current->data + current->data_size - srolis::BITS_OF_NODE);
         }
-
-        while (root->data_size>0) {
-           next = reinterpret_cast<srolis::Node *>(root->data+root->data_size-srolis::BITS_OF_NODE);
-           data = next->data;
-           data_size = next->data_size;
-           if (next->data_size>0) {  // to avoid partial ::free
-            ::free((char*)root->data);
-           }
-           root->data = data;
-           root->data_size = data_size;
+        
+        if (!safe_point) return;  // No safe versions to reclaim
+        
+        // Phase 2: Collect nodes to free (after safe point)
+        current = safe_point;
+        while (current && current->data_size > 0) {
+            srolis::Node *next = reinterpret_cast<srolis::Node*>(
+                current->data + current->data_size - srolis::BITS_OF_NODE);
+            
+            if (next->data_size > 0) {
+                to_free.push_back(current);
+            }
+            current = next;
+        }
+        
+        // Phase 3: Update chain and batch free
+        if (!to_free.empty()) {
+            // Update the chain - no other thread accesses this
+            safe_point->data_size = 0;  // Mark end of chain
+            
+            // Batch free old nodes
+            for (auto* node : to_free) {
+                ::free(node->data);
+            }
         }
     }
 
@@ -160,35 +182,18 @@ public:
             header->timestamp = TThread::txn->tid_unique_;
             header->data_size = 0;  // indicate no next block
             memcpy(oldval_str+oldval_len-srolis::EXTRA_BITS_FOR_VALUE, &time_term, srolis::BITS_OF_TT);
-            lazyReclaim(time_term, current_term, header);
         } else {  // update or delete
-            // alg1: copy old value and then update
-            // if (false){
-            //     char *data = (char*) malloc(oldval_len);
-            //     memcpy(data, oldval_str, oldval_len);
-
-            //     // update the old position: node, value, time_term
-            //     memcpy(oldval_str, newval.data(), newval.length()-srolis::EXTRA_BITS_FOR_VALUE);
-            //     memcpy(oldval_str+newval.length()-srolis::EXTRA_BITS_FOR_VALUE, &time_term, srolis::BITS_OF_TT);
-            //     srolis::Node* header = reinterpret_cast<srolis::Node*>(oldval_str+newval.length()-srolis::BITS_OF_NODE);
-            //     header->data_size = oldval_len;
-            //     header->data = data;
-            //     lazyReclaim(time_term, current_term, header);
-            // }
-
-            // alg2: modify the pointer, avoid memcpy for oldval
-            //if (true){
-                char* new_vv = (char*)malloc(newval.length());
-                memcpy(new_vv, newval.data(), newval.length()-srolis::EXTRA_BITS_FOR_VALUE);
-                memcpy(new_vv+newval.length()-srolis::EXTRA_BITS_FOR_VALUE, 
-                                    &time_term, srolis::BITS_OF_TT);
-                srolis::Node* header = reinterpret_cast<srolis::Node*>(new_vv+newval.length()-srolis::BITS_OF_NODE);
-                // Set single timestamp
-                header->timestamp = TThread::txn->tid_unique_;
-                header->data_size = oldval_len;
-                header->data = e->data();
-                e->modifyData(new_vv);
-                lazyReclaim(time_term, current_term, header);
+            char* new_vv = (char*)malloc(newval.length());
+            memcpy(new_vv, newval.data(), newval.length()-srolis::EXTRA_BITS_FOR_VALUE);
+            memcpy(new_vv+newval.length()-srolis::EXTRA_BITS_FOR_VALUE, 
+                                &time_term, srolis::BITS_OF_TT);
+            srolis::Node* header = reinterpret_cast<srolis::Node*>(new_vv+newval.length()-srolis::BITS_OF_NODE);
+            // Set single timestamp
+            header->timestamp = TThread::txn->tid_unique_;
+            header->data_size = oldval_len;
+            header->data = e->data();
+            e->modifyData(new_vv);
+            lazyReclaim(time_term, current_term, header);
         }
         return ;
     }

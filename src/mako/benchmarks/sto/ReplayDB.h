@@ -7,7 +7,7 @@
 
 // Single timestamp system commit info
 struct CommitInfo {
-    uint32_t timestamp;
+    uint32_t timestamp; // timestamp*10+term
     uint32_t latency_tracker;
 };
 

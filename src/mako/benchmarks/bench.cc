@@ -480,7 +480,7 @@ bench_runner::run()
       if (runtime_loop % repeats == 0) 
         Warning("runtime time left:%d ms, bool:%d",runtime_loop * interval, runtime_loop>0);
       if (runtime_loop % repeats == 0) 
-        std::cout<<"flush"<<std::flush;
+        std::cout<<std::flush;
       runtime_loop--;
       std::this_thread::sleep_for(std::chrono::milliseconds(interval));
       uint32_t n_commits = 0 ;

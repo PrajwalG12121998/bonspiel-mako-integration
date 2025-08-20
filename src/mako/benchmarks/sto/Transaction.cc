@@ -728,14 +728,13 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
     unsigned int len_of_KV = w - w_tmp;
     memcpy(array + w_tmp - sizeof(unsigned int), (char *) &len_of_KV, sizeof(unsigned int));
 
-    std::string prefix_str = std::to_string(TThread::id());
     instance->update_ptr(w);
     size_t pos = 0;
     unsigned char *queueLog = instance->getLogOnly (pos);
     if(instance->checkPushRequired()) {
       assert(pos <= MAX_ARRAY_SIZE_IN_BYTES) ;
       if(pos!=0) {
-          // 7. latest_commit_id: single timestamp
+          // 7. latest_commit_id: single timestamp*10+term
           memcpy (queueLog + pos, &instance->latest_commit_timestamp, sizeof(uint32_t));
           pos += sizeof(uint32_t);
           

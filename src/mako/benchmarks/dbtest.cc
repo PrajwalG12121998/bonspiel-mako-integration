@@ -704,17 +704,15 @@ main(int argc, char **argv)
         }else{
           CommitInfo commit_info = get_latest_commit_info((char *) log, len);
           timestamp = commit_info.timestamp;  // Store for return value encoding
-          
-          //ALWAYS_ASSERT(commit_info.timestamp>=0);
-          //Warning("par_id:%d, slot_id:%d, timestamp:%llu",par_id, slot_id, commit_info.timestamp);
           sync_util::sync_logger::local_timestamp_[par_id].store(commit_info.timestamp, memory_order_release) ;
           uint32_t w = sync_util::sync_logger::retrieveW();
           // Single timestamp safety check
           if (sync_util::sync_logger::safety_check(commit_info.timestamp, w)) { // pass safety check
             treplay_in_same_thread_opt_mbta_v2(par_id, (char*)log, len, db, nshards);
-            //Warning("replay par_id:%d,slot_id:%d,un_replay_logs_:%d", par_id, slot_id,un_replay_logs_.size());
+            //Warning("replay[YES] par_id:%d,st:%u,slot_id:%d,un_replay_logs_:%d", par_id, commit_info.timestamp, slot_id,un_replay_logs_.size());
             status = 4;
           } else {
+            //Warning("replay[NO] par_id:%d,st:%u,slot_id:%d,un_replay_logs_:%d", par_id, commit_info.timestamp, slot_id,un_replay_logs_.size());
             status = 3;
           }
         }
@@ -739,8 +737,6 @@ main(int argc, char **argv)
             }
           }
         }
-        
-        // (TODO) server (!=0) wait for watermark computed from all other partition servers
       }
       auto w = sync_util::sync_logger::retrieveW(); 
 

@@ -7,9 +7,6 @@
 #include "lib/promise.h"
 #include "lib/common.h"
 
-// TODO: I have to draw a figure and write a document on how it works; you don't need to do anything
-
-// TODOs: go through all those functions, some of them use vector accordingly
 namespace srolis
 {
     using namespace std;

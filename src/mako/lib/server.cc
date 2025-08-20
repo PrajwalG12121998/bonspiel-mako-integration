@@ -183,8 +183,6 @@ namespace srolis
         resp->req_nr = req->req_nr;
         respLen = sizeof(get_int_response_t);
         resp->status = (current_term > req->req_nr % 10)? ErrorCode::ABORT: status; // If a reqest comes from old epoch, reject it.;
-        // unsigned int ui;
-		// result = __rdtscp(&ui);
         resp->result = __sync_fetch_and_add(&sync_util::sync_logger::local_replica_id, 1);;
     }
 

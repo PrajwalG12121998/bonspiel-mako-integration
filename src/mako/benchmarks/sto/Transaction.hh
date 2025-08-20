@@ -102,7 +102,7 @@ class StringAllocator{
  public:
   size_t entries;
   size_t curr_pos;
-  uint32_t latest_commit_timestamp;  // Single timestamp instead of vector
+  uint32_t latest_commit_timestamp;  // Single timestamp instead of vector, timestamp*10+epoch
 
   StringAllocator(size_t nshards_x, int max_bytes_size_x, int batch_size_x){
     LOG = (unsigned char *) malloc (max_bytes_size_x);
@@ -732,10 +732,8 @@ public:
 
     void updateSingleTimestamp() const {
         assert(state_ == s_committing_locked || state_ == s_committing);
-        //unsigned int ui;
 	    if(!tid_unique_)
             tid_unique_ = __sync_fetch_and_add(&sync_util::sync_logger::local_replica_id, 1);
-            //tid_unique_ = __rdtscp(&ui);
 
         if (TThread::writeset_shard_bits>0/*||TThread::readset_shard_bits>0*/) {
             // Get single timestamp from remote shards
