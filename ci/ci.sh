@@ -15,6 +15,7 @@ run_simple_transaction() {
 
 # Function 3: Run simple Paxos test
 run_simple_paxos() {
+    bash ./src/mako/update_config.sh 
     ./examples/simplePaxos.sh 
 }
 
