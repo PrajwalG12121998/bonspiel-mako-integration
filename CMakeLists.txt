@@ -11,6 +11,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED libdpdk)
 
+# Find Python for txlog library
+find_package(Python3 COMPONENTS Development REQUIRED)
+
+# Find Boost libraries for txlog library
+find_package(Boost REQUIRED COMPONENTS system filesystem thread coroutine context)
+
 # Define paths
 set(mkfile_path "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
 set(HOME "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -22,19 +28,26 @@ set(TOP "${CMAKE_SOURCE_DIR}")
 
 # RUST
 set(RUST_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rust-lib/target/release")
-# Custom target to build Rust library
-add_custom_target(rust_build ALL
-    COMMAND cargo build --release
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/rust-lib
-    COMMENT "Building Rust library"
-    VERBATIM
-)
 set(RUST_LIB_NAME "rust_redis")
+set(RUST_LIB_PATH "${RUST_LIB_DIR}/lib${RUST_LIB_NAME}.a")
+
+# Use add_custom_command instead of add_custom_target to avoid rebuilding every time
+add_custom_command(
+    OUTPUT ${RUST_LIB_PATH}
+    COMMAND cargo build --release
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/rust-lib
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/rust-lib/Cargo.toml
+            ${CMAKE_CURRENT_SOURCE_DIR}/rust-lib/src/lib.rs
+    COMMENT "Building Rust library if needed"
+)
+
+# Create a custom target that depends on the output
+add_custom_target(rust_build ALL DEPENDS ${RUST_LIB_PATH})
+
 # Create imported library for Rust library
 add_library(rust_lib STATIC IMPORTED)
 set_target_properties(rust_lib PROPERTIES
-    IMPORTED_LOCATION "${RUST_LIB_DIR}/lib${RUST_LIB_NAME}.a"
+    IMPORTED_LOCATION "${RUST_LIB_PATH}"
 )
 add_dependencies(rust_lib rust_build)
 
@@ -452,33 +465,120 @@ set(BENCH_LDFLAGS
 # Custom command for Masstree configuration
 # avoid adding backslashes (\) automatically
 separate_arguments(MASSTREE_CONFIG_ARGS NATIVE_COMMAND "${MASSTREE_CONFIG}")
-add_custom_command(
-  OUTPUT ${W}/masstree/config.h
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  #COMMAND rm -f "${W}/masstree/config.h"
-  COMMAND cd "${W}/masstree" && ./configure ${MASSTREE_CONFIG_ARGS}
-  COMMAND test -f "${W}/masstree/config.h" && touch "${W}/masstree/config.h" || true
-  DEPENDS "${O}/${W}/buildstamp.masstree" "${W}/masstree/configure" "${W}/masstree/config.h.in"
+
+# Masstree configuration - automatically configure if needed
+# First, run autoreconf if configure script doesn't exist
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${W}/masstree/configure")
+  message(STATUS "Running autoreconf for Masstree...")
+  execute_process(
+    COMMAND autoreconf -i
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${W}/masstree"
+    RESULT_VARIABLE autoreconf_result
+  )
+  if(NOT autoreconf_result EQUAL 0)
+    message(FATAL_ERROR "Failed to run autoreconf for Masstree")
+  endif()
+endif()
+
+# Then, run configure if config.h doesn't exist
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${W}/masstree/config.h")
+  message(STATUS "Configuring Masstree with: ${MASSTREE_CONFIG}")
+  execute_process(
+    COMMAND ./configure ${MASSTREE_CONFIG_ARGS}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${W}/masstree"
+    RESULT_VARIABLE configure_result
+  )
+  if(NOT configure_result EQUAL 0)
+    message(FATAL_ERROR "Failed to configure Masstree")
+  endif()
+endif()
+
+# Custom command for lz4 library - build only if missing
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4/liblz4.so")
+  message(STATUS "Building LZ4 library...")
+  execute_process(
+    COMMAND make -C "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4" library
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE lz4_result
+  )
+  if(NOT lz4_result EQUAL 0)
+    message(FATAL_ERROR "Failed to build LZ4 library")
+  endif()
+  message(STATUS "LZ4 library built successfully")
+endif()
+
+# Build libtxlog.so natively with CMake instead of WAF
+# Collect RRR source files
+file(GLOB RRR_SRC
+    "src/rrr/base/*.hpp"
+    "src/rrr/base/*.cpp"
+    "src/rrr/misc/*.hpp"
+    "src/rrr/misc/*.cpp"
+    "src/rrr/reactor/*.h"
+    "src/rrr/reactor/*.cc"
+    "src/rrr/pylib/simplerpc/_pyrpc.cpp"
+    "src/rrr/rpc/*.cpp"
+    "src/rrr/rpc/*.hpp"
+    "src/rrr/utils/*.h"
+    "src/rrr/rrr.h"
+    "src/rrr/rrr.hpp"
 )
 
-add_custom_command(
-  OUTPUT ${W}/masstree/configure ${W}/masstree/config.h.in
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMAND cd "${W}/masstree" && autoreconf -i && touch configure config.h.in
-  DEPENDS "${W}/masstree/configure.ac"
+# Collect MEMDB source files
+file(GLOB MEMDB_SRC
+    "src/memdb/*.h"
+    "src/memdb/*.cc"
 )
 
-# Custom command for lz4 library
-add_custom_command(
-  OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4/liblz4.so
-  COMMAND make -C "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4" library
+# Collect deptran and bench source files (matching WAF's ant_glob patterns)
+file(GLOB_RECURSE DEPTRAN_SRC
+    "src/deptran/*.cc"
+    "src/deptran/*/*.cc"
+    "src/bench/*/*.cc"
+)
+# Exclude specific files as per WAF configuration
+list(FILTER DEPTRAN_SRC EXCLUDE REGEX "src/deptran/s_main.cc")
+list(FILTER DEPTRAN_SRC EXCLUDE REGEX "src/deptran/paxos_main_helper.cc")
+list(FILTER DEPTRAN_SRC EXCLUDE REGEX "src/bench/paxos_lib/.*")
+
+# Build libtxlog as a shared library
+add_library(txlog SHARED
+    src/deptran/paxos_main_helper.cc
+    ${DEPTRAN_SRC}
+    ${RRR_SRC}
+    ${MEMDB_SRC}
 )
 
-# Custom command for libtxlog.so
-add_custom_command(
-  OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/build/libtxlog.so
-  COMMAND python3 waf configure build -M
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+target_include_directories(txlog PRIVATE
+    src
+    src/rrr
+    src/memdb
+    src/deptran
+    src/bench
+    dependencies/yaml-cpp/include
+    ${Boost_INCLUDE_DIRS}
+    ${Python3_INCLUDE_DIRS}
+)
+
+target_compile_options(txlog PRIVATE ${BENCH_CXXFLAGS})
+target_compile_definitions(txlog PRIVATE CONFIG_H=\"${CONFIG_H}\")
+
+target_link_libraries(txlog
+    yaml-cpp
+    Boost::system
+    Boost::filesystem
+    Boost::thread
+    Boost::coroutine
+    Boost::context
+    pthread
+    ${CMAKE_DL_LIBS}
+    Python3::Python
+)
+
+# Set output location to match expected path
+set_target_properties(txlog PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    OUTPUT_NAME "txlog"
 )
 
 # Build stamp files
@@ -505,8 +605,8 @@ if(NOT "${MASSTREE_CONFIG}" STREQUAL "${DEP_MASSTREE_CONFIG}")
   set(DEP_MASSTREE_CONFIG "${MASSTREE_CONFIG}" CACHE INTERNAL "Stored MASSTREE_CONFIG")
 endif()
 
-# Add a masstree dependency
-set_source_files_properties(${MAKO_SRCFILES} PROPERTIES OBJECT_DEPENDS "${W}/masstree/config.h")
+# Masstree dependency - not needed since we assume it's pre-configured
+# set_source_files_properties(${MAKO_SRCFILES} PROPERTIES OBJECT_DEPENDS "${W}/masstree/config.h")
 
 # Add the mako library
 add_library(mako STATIC ${MAKO_SRCFILES})
@@ -526,8 +626,8 @@ set_target_properties(mako PROPERTIES OUTPUT_NAME "mako")
 # ------------------------------------- build apps -----------------------------------------------
 
 # Custom targets for additional dependencies
-add_custom_target(lz4_lib DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4/liblz4.so)
-add_custom_target(txlog_lib DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/build/libtxlog.so)
+# lz4 is handled during configuration, no need for custom target
+# txlog_lib is now built directly as a CMake target, no need for custom target
 
 
 function(add_apps exec_name exec_path)
@@ -551,7 +651,7 @@ function(add_apps exec_name exec_path)
       mako
       erpc
       rust_lib
-      ${CMAKE_CURRENT_SOURCE_DIR}/build/libtxlog.so
+      txlog  # Link to the CMake txlog target instead of the .so file
       ${BENCH_LDFLAGS}
       yaml-cpp
       pthread
@@ -564,12 +664,13 @@ function(add_apps exec_name exec_path)
   )
   
   # Add dependencies
-  add_dependencies(${exec_name} mako erpc rust_lib lz4_lib txlog_lib)
+  add_dependencies(${exec_name} mako erpc rust_lib txlog)
 endfunction()
 
 add_apps(dbtest src/mako/benchmarks/dbtest.cc)
 add_apps(simpleTransaction examples/simpleTransaction.cc)
 add_apps(simplePaxos examples/simplePaxos.cc)
+add_apps(helloworld examples/helloworld.cc)
 
 add_apps(paxos_async_commit_test src/mako/benchmarks/paxos_async_commit_test.cc)
 add_apps(basic src/mako/benchmarks/ut/basic.cc)
