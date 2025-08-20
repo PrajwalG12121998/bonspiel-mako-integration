@@ -403,7 +403,6 @@ namespace srolis
         return is_all_response_ok();
     }
 
-
     int ShardClient::warmupRequest(uint32_t req_val, uint8_t centerId, uint32_t &ret_value, uint64_t set_bits) {
         calculate_num_response_waiting_no_skip(set_bits);
         uint16_t server_id = req_val; // we don't forward to a helper queue;
@@ -417,12 +416,9 @@ namespace srolis
                             bind(&ShardClient::SendToAllIntCallBack, this, placeholders::_1),
                             bind(&ShardClient::SendToAllGiveUpTimeout, this),
                             BASIC_TIMEOUT);
-        // Single timestamp system: use maximum value from all shards
         ret_value = 0;
         for (int i=0; i<(int)int_received.size(); i++) {
-            if (int_received[i] > ret_value) {
-                ret_value = int_received[i];
-            }
+            ret_value += int_received[i];
         }
         return is_all_response_ok(); 
     }
@@ -440,12 +436,9 @@ namespace srolis
                             bind(&ShardClient::SendToAllIntCallBack, this, placeholders::_1),
                             bind(&ShardClient::SendToAllGiveUpTimeout, this),
                             BASIC_TIMEOUT);
-        // Single timestamp system: use maximum value from all shards
         ret_value = 0;
         for (int i=0; i<(int)int_received.size(); i++) {
-            if (int_received[i] > ret_value) {
-                ret_value = int_received[i];
-            }
+            ret_value += int_received[i];
         }
         return is_all_response_ok(); 
     }

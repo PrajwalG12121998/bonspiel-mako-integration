@@ -518,7 +518,8 @@ bool Transaction::try_commit(bool no_paxos) {
     if (TThread::readset_shard_bits > 0) {
         // Single timestamp system: pass and receive single watermark
         int ret=TThread::sclient->remoteValidate(watermarkTimestamp);
-        if(watermarkTimestamp > 0) {
+        uint32_t currentWatermark = sync_util::sync_logger::single_watermark_.load(memory_order_acquire);
+        if(watermarkTimestamp > currentWatermark) {
             // Update single watermark
             sync_util::sync_logger::single_watermark_.store(watermarkTimestamp, memory_order_release);
         }
