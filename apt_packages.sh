@@ -40,3 +40,5 @@ sudo apt-get --assume-yes install build-essential cmake gcc libudev-dev libnl-3-
 sudo apt-get --assume-yes install ninja-build pkg-config valgrind python3-dev cython3 python3-docutils pandoc
 
 sudo apt-get --assume-yes install gh cargo openssh-server
+# for rusty-cpp-checker
+sudo apt-get install llvm-14-dev libclang-14-dev 

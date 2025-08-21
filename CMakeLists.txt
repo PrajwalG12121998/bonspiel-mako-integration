@@ -8,6 +8,11 @@ project(mako)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Configure and enable rusy-cpp-checker
+include(${CMAKE_CURRENT_SOURCE_DIR}/third-party/rustycpp/cmake/RustyCppSubmodule.cmake)
+set(RUSTYCPP_BUILD_TYPE "release")  # or "debug"
+enable_borrow_checking()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED libdpdk)
 
@@ -671,6 +676,15 @@ add_apps(dbtest src/mako/benchmarks/dbtest.cc)
 add_apps(simpleTransaction examples/simpleTransaction.cc)
 add_apps(simplePaxos examples/simplePaxos.cc)
 add_apps(helloworld examples/helloworld.cc)
+
+# Enable borrow checking for dbtest
+set(ENABLE_BORROW_CHECKING ON CACHE BOOL "Enable borrow checking" FORCE)
+set(BORROW_CHECK_FATAL ON CACHE BOOL "Make borrow check failures fatal" FORCE)
+
+# Apply borrow checking to dbtest target
+if(ENABLE_BORROW_CHECKING)
+    add_borrow_check_target(dbtest)
+endif()
 
 add_apps(paxos_async_commit_test src/mako/benchmarks/paxos_async_commit_test.cc)
 add_apps(basic src/mako/benchmarks/ut/basic.cc)
