@@ -22,6 +22,7 @@ __thread int TThread::shard_index;
 __thread int TThread::pid;
 __thread int TThread::the_mode;
 __thread int TThread::the_num_erpc_server;
+__thread int TThread::the_is_micro;
 __thread int TThread::the_counter;
 __thread int TThread::the_role;
 __thread int TThread::warehouses;
@@ -587,11 +588,12 @@ bool Transaction::try_commit(bool no_paxos) {
     if (!no_paxos) {
         #if defined(SIMPLE_WORKLOAD)
             int large_batch_num=5;
-        #elif defined(MICRO_BENCHMARK)
-            int large_batch_num=3000;
         #else
             int large_batch_num=400;
         #endif
+
+        if (TThread::get_is_micro())
+            large_batch_num=3000;
         serialize_util(nwriteset, false, MAX_ARRAY_SIZE_IN_BYTES, large_batch_num, tid_unique_);
     }
 #endif

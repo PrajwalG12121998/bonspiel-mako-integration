@@ -44,10 +44,10 @@ class ExperimentRunner:
         else:
             self.commands.append("")
 
-    def compile_project(self, shards, is_replicated, is_micro):
+    def compile_project(self, shards, is_replicated):
         """Compile the project with specified parameters"""
         print(f"\n=== COMPILATION ===")
-        print(f"Shards: {shards}, Replicated: {is_replicated}, Micro: {is_micro}")
+        print(f"Shards: {shards}, Replicated: {is_replicated}")
         
         self.add_section_break("COMPILATION")
         
@@ -63,8 +63,7 @@ class ExperimentRunner:
         self.add_section_break()
         
         # Configure with CMake
-        cmake_cmd = (f"cmake .. -DPAXOS_LIB_ENABLED={is_replicated} "
-                    f"-DMICRO_BENCHMARK={is_micro}")
+        cmake_cmd = (f"cmake .. -DPAXOS_LIB_ENABLED={is_replicated}")
         self.run_command(cmake_cmd, "Configure with CMake")
         self.add_section_break()
         
@@ -107,7 +106,7 @@ class ExperimentRunner:
         self.add_section_break()
         
         if is_replicated:
-            roles = ["p1", "p2", "localhost", "learner"]
+            roles = ["localhost", "learner", "p2", "p1"]
         else:
             roles = ["localhost"]
         
@@ -180,7 +179,6 @@ class ExperimentRunner:
         shards = params.get('shards', 0)
         replicated = "repl" if params.get('is_replicated', False) else "norepl"
         threads = params.get('threads', 0)
-        micro = "micro" if params.get('is_micro', False) else "tpcc"
         
         suffix = ""
         if is_cleanup:
@@ -190,7 +188,7 @@ class ExperimentRunner:
         elif skip_compile:
             suffix = "_no-compile"
         
-        return f"experiment_s{shards}_{replicated}_t{threads}_{micro}_{suffix}.sh"
+        return f"experiment_s{shards}_{replicated}_t{threads}_{suffix}.sh"
 
     def save_commands_script(self, filename=None, is_cleanup=False, only_compile=False, skip_compile=False):
         """Save all commands to a bash script with descriptive header"""
@@ -210,7 +208,6 @@ class ExperimentRunner:
 # Experiment Configuration:
 #   - Shards: {params.get('shards', 'N/A')}
 #   - Replication: {'Enabled (Paxos)' if params.get('is_replicated', False) else 'Disabled'}
-#   - Benchmark: {'Microbenchmark' if params.get('is_micro', False) else 'TPC-C'}
 #   - Threads per shard: {params.get('threads', 'N/A')}
 #   - Mode: {'Dry run' if self.dry_run else 'Executed'}
 #
@@ -240,8 +237,6 @@ def main():
                        help="Number of shards (default: 3)")
     parser.add_argument("--replicated", action="store_true", 
                        help="Enable replication (Paxos)")
-    parser.add_argument("--micro", action="store_true", 
-                       help="Use microbenchmark instead of TPC-C")
     
     parser.add_argument("--threads", type=int, default=6, 
                        help="Number of worker threads per shard (default: 6)")
@@ -276,7 +271,6 @@ def main():
         runner.experiment_params = {
             'shards': args.shards,
             'is_replicated': args.replicated,
-            'is_micro': args.micro,
             'threads': args.threads,
         }
         
@@ -285,8 +279,7 @@ def main():
         elif args.only_compile:
             # Only compile, don't run experiments
             success = runner.compile_project(args.shards, 
-                                           1 if args.replicated else 0, 
-                                           1 if args.micro else 0)
+                                           1 if args.replicated else 0)
             if not success and not args.dry_run:
                 print("Compilation failed!")
                 return 1
@@ -294,8 +287,7 @@ def main():
             # Compile first (unless skipped), then run
             if not args.skip_compile:
                 success = runner.compile_project(args.shards, 
-                                               1 if args.replicated else 0, 
-                                               1 if args.micro else 0)
+                                               1 if args.replicated else 0)
                 if not success and not args.dry_run:
                     print("Compilation failed!")
                     return 1

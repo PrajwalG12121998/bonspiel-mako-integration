@@ -976,6 +976,7 @@ public:
     TThread::set_id(__sync_fetch_and_add(&tidcounter, 1));
     TThread::set_mode(0); // checking in-progress
     TThread::set_num_eprc_server(num_erpc_server);
+    TThread::set_is_micro(is_micro);
 #if defined(DISABLE_MULTI_VERSION)
     TThread::disable_multiversion();
 #else

@@ -8,7 +8,7 @@ BUILD_DIR = build
 all: build
 
 configure:
-	cmake -S . -B $(BUILD_DIR) -DPAXOS_LIB_ENABLED=0 -DMICRO_BENCHMARK=0
+	cmake -S . -B $(BUILD_DIR) -DPAXOS_LIB_ENABLED=0 
 
 build: configure
 	cmake --build $(BUILD_DIR) --parallel  

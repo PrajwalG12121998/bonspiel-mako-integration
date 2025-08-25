@@ -31,6 +31,8 @@ class TThread {
     static __thread int the_counter;
     // number of erpc servers
     static __thread int the_num_erpc_server;
+    // if run micro-based benchmark
+    static __thread int the_is_micro;
 
 public:
     // number of transactions to skip before the next remote transactions
@@ -80,6 +82,10 @@ public:
     }
 
     static void set_num_eprc_server(int nn) { the_num_erpc_server = nn; }
+
+    static void set_is_micro(int is_micro) { the_is_micro = is_micro; }
+
+    static int get_is_micro() { return the_is_micro; }
 
     static int mode() {
         return the_mode;

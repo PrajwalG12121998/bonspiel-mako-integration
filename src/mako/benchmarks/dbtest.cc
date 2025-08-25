@@ -10,6 +10,7 @@ static std::atomic<int> end_received_leader(0);
 
 static void parse_command_line_args(int argc, char **argv, 
                                    string& paxos_proc_name,
+                                   int &is_micro,
                                    string& site_name,
                                    vector<string>& paxos_config_file,
                                    int& leader_config)
@@ -23,6 +24,7 @@ static void parse_command_line_args(int argc, char **argv,
       {"paxos-config"               , required_argument , 0                          , 'F'} ,
       {"paxos-proc-name"            , required_argument , 0                          , 'P'} ,
       {"site-name"                  , required_argument , 0                          , 'N'} ,
+      {"is_micro"                   , no_argument       , &is_micro                  ,   1} ,
       {0, 0, 0, 0}
     };
     int option_index = 0;
@@ -709,7 +711,7 @@ main(int argc, char **argv)
   std::vector<std::pair<uint32_t, uint32_t>> advanceWatermarkTracker;  // local watermark -> time
 
   // Parse command line arguments
-  parse_command_line_args(argc, argv, paxos_proc_name, site_name, paxos_config_file, leader_config);
+  parse_command_line_args(argc, argv, paxos_proc_name, is_micro, site_name, paxos_config_file, leader_config);
 
   // Handle new configuration format if site name is provided
   if (!site_name.empty() && config != nullptr) {

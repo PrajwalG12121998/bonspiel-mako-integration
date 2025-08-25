@@ -115,11 +115,9 @@ int PaxosWorker::Next(int slot_id, shared_ptr<Marshallable> cmd) {
   if (cmd.get()->kind_== MarshallDeputy::CONTAINER_CMD) {
     if (this->callback_par_id_return_ != nullptr) {
       // forward the cmd to the learner
-      // if (site_info_->proc_name.compare("p1")==0 /* localhost */
-      //      && !noops_received /* if this entry is noops, forward it!*/ ) {
-      // ONLY localhost forward the request
-      if ((site_info_->proc_name.compare("p1")==0) /* localhost */
-            && !noops_received /* if this entry is noops, forward it!*/ ) {
+      // we use p1 to forward requests to save leader's bandwidth
+      // it's better to start p1 at the end
+      if ((site_info_->proc_name.compare("p1")==0)) {
         auto coord = rep_frame_->CreateBulkCoordinator(Config::GetConfig(), 0);
         coord->commo_->ForwardToLearner(site_info_->partition_id_,
                                        slot_id,

@@ -17,6 +17,7 @@ path=$(pwd)/src/mako
 # sudo gdb --args cgexec -g cpuset:cpulimit
 ./build/dbtest \
                 --num-threads $trd  \
+                --is_micro \
                 --shard-index $shard --shard-config $path/config/local-shards$nshard-warehouses$trd.yml \
                 -F config/1leader_2followers/paxos$trd\_shardidx$shard.yml -F config/occ_paxos.yml \
                 -P $cluster 

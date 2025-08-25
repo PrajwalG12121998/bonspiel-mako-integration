@@ -60,6 +60,7 @@ int retry_aborted_transaction = 1;
 int no_reset_counters = 0;
 int backoff_aborted_transaction = 0;
 int use_hashtable = 0;
+int is_micro = 0; // if run micro-based implementation
 
 // par_id ==> shardClient
 std::unordered_map<int, mako::ShardClient*> shardClientAll;

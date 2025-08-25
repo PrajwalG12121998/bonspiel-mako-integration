@@ -215,8 +215,6 @@ static int g_order_status_scan_hack = 0;
 static unsigned g_txn_workload_mix[] = { 100, 0, 0, 0, 0 };
 #elif defined(SIMPLE_WORKLOAD) || defined(MEGA_BENCHMARK_MICRO)
 static unsigned g_txn_workload_mix[] = { 50, 50, 0, 0, 0 };
-#elif defined(MICRO_BENCHMARK)
-static unsigned g_txn_workload_mix[] = { 50, 50, 0, 0, 0 };
 #else
 static unsigned g_txn_workload_mix[] = { 45, 43, 4, 4, 4 }; // default TPC-C workload mix
 #endif
@@ -940,10 +938,12 @@ protected:
   virtual void
   load()
   {
+    if (TThread::get_is_micro()) {
+      load_micro();
+      return ;
+    }
 #if defined(SIMPLE_WORKLOAD)
     load_simple();
-#elif defined(MICRO_BENCHMARK)
-    load_micro();
 #else
     string obj_buf;
     void *txn = db->new_txn(txn_flags, arena, txn_buf());
@@ -2229,13 +2229,14 @@ tpcc_worker::txn_new_order_mega()
 tpcc_worker::txn_result
 tpcc_worker::txn_new_order()
 {
+  if (TThread::get_is_micro()) {
+    if (drtm)
+      return txn_new_order_micro_drtm();
+    return txn_new_order_micro();
+  }
 #if defined(SIMPLE_WORKLOAD)
   usleep(rand()%10 * 1000);
   return txn_new_order_simple();
-#elif defined(MICRO_BENCHMARK)
-  if (drtm)
-    return txn_new_order_micro_drtm();
-  return txn_new_order_micro();
 #else
   const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
 
@@ -2808,11 +2809,11 @@ tpcc_worker::txn_payment_micro() {
 tpcc_worker::txn_result
 tpcc_worker::txn_payment()
 {
-#if defined(MICRO_BENCHMARK)
+if (TThread::get_is_micro()) { 
   if (drtm)
     return txn_payment_micro_drtm();
   return txn_payment_micro();
-#else
+}
   const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
   const uint districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
   uint customerDistrictID, customerWarehouseID;
@@ -3083,7 +3084,6 @@ tpcc_worker::txn_payment()
     db->abort_txn_local(txn);
   }
   return txn_result(false, 0 + (isRemote?1:0));
-#endif
 }
 
 class order_line_nop_callback : public abstract_ordered_index::scan_callback {
@@ -3669,9 +3669,11 @@ protected:
   make_loaders()
   {
     vector<bench_loader *> ret;
+    if (TThread::get_is_micro()) {
+      ret.push_back(new tpcc_warehouse_loader(9324, db, open_tables, partitions, dummy_partitions));
+      return ret;
+    }
 #if defined(SIMPLE_WORKLOAD)
-    ret.push_back(new tpcc_warehouse_loader(9324, db, open_tables, partitions, dummy_partitions));
-#elif defined(MICRO_BENCHMARK)
     ret.push_back(new tpcc_warehouse_loader(9324, db, open_tables, partitions, dummy_partitions));
 #else
     ret.push_back(new tpcc_warehouse_loader(9324, db, open_tables, partitions, dummy_partitions));
@@ -3773,6 +3775,10 @@ tpcc_do_test(abstract_db *db, int argc, char **argv, int run = 0, bench_runner *
     // }
 #endif
     return rc; // rc is same object as r below
+  }
+  if (TThread::get_is_micro()) {
+    unsigned default_mix_for_micro[] = {50, 50, 0, 0, 0};
+    std::copy_n(default_mix_for_micro, 5, g_txn_workload_mix);
   }
 
   auto x0 = std::chrono::high_resolution_clock::now() ;
