@@ -11,6 +11,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Configure and enable rusy-cpp-checker
 include(${CMAKE_CURRENT_SOURCE_DIR}/third-party/rustycpp/cmake/RustyCppSubmodule.cmake)
 set(RUSTYCPP_BUILD_TYPE "release")  # or "debug"
+
+# Build the rusty-cpp-checker binary first before enabling borrow checking
+set(RUSTYCPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third-party/rustycpp")
+set(CPP_BORROW_CHECKER "${RUSTYCPP_DIR}/target/${RUSTYCPP_BUILD_TYPE}/rusty-cpp-checker")
+
+# Create a custom command to build the checker if it doesn't exist
+if(NOT EXISTS ${CPP_BORROW_CHECKER})
+    message(STATUS "Building rusty-cpp-checker binary...")
+    execute_process(
+        COMMAND cargo build --${RUSTYCPP_BUILD_TYPE}
+        WORKING_DIRECTORY ${RUSTYCPP_DIR}
+        RESULT_VARIABLE BUILD_RESULT
+    )
+endif()
+
 enable_borrow_checking()
 
 find_package(PkgConfig REQUIRED)
