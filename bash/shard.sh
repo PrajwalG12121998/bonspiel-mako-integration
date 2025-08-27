@@ -1,7 +1,6 @@
 #!/bin/bash
 #sudo cgdelete -g cpuset:/cpulimit 2>/dev/null || true
 #sudo cgcreate -t $USER:$USER -a $USER:$USER -g cpuset:/cpulimit
-set -xv
 nshard=$1
 shard=$2
 trd=$3
@@ -27,7 +26,16 @@ if [ "$is_replicated" == "1" ]; then
     CMD="$CMD --is-replicated"
 fi
 
-# sudo gdb --args 
-# sudo strace -f -c
-# sudo gdb --args cgexec -g cpuset:cpulimit
+# Print configuration
+echo "========================================="
+echo "Configuration:"
+echo "========================================="
+echo "  Number of shards:  $nshard"
+echo "  Shard index:       $shard"
+echo "  Number of threads: $trd"
+echo "  Cluster:           $cluster"
+echo "  Micro benchmark:   $([ "$is_micro" == "1" ] && echo "enabled" || echo "disabled")"
+echo "  Replicated mode:   $([ "$is_replicated" == "1" ] && echo "enabled" || echo "disabled")"
+echo "========================================="
+
 eval $CMD 

@@ -39,6 +39,9 @@ jobs:
       - name: Run tests - simple replication
         run: ./ci/ci.sh simplePaxos 
 
+      - name: Run tests - simple 2 shards without replication 
+        run: ./ci/ci.sh 2shardNoReplication 
+
       - name: Cleanup
         if: always()
         run: ./ci/clean.sh
