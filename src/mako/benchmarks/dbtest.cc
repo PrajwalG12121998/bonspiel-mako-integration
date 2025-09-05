@@ -120,7 +120,6 @@ static void run_workers(abstract_db* db)
 int
 main(int argc, char **argv)
 {
-
   // Parameters prepared
   int is_micro = 0;  // Flag for micro benchmark mode
   int is_replicated = 0;  // if use Paxos to replicate
