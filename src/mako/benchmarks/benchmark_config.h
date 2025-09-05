@@ -128,7 +128,7 @@ class BenchmarkConfig {
       const std::vector<std::string>& getPaxosConfigFile() const { return paxos_config_file_; }
 
       // Setters
-      void setNthreads(size_t n) { nthreads_ = n; }
+      void setNthreads(size_t n) { nthreads_ = n; setScaleFactor(n); }
       void setNshards(size_t n) { nshards_ = n; }
       void setNumErpcServer(size_t n) { num_erpc_server_ = n; }
       void setShardIndex(size_t idx) { shardIndex_ = idx; }
@@ -154,7 +154,7 @@ class BenchmarkConfig {
       void setUseHashtable(int use) { use_hashtable_ = use; }
       void setIsMicro(int micro) { is_micro_ = micro; }
       void setIsReplicated(int replicated) { is_replicated_ = replicated; }
-      void setPaxosProcName(std::string paxos_proc_name) { paxos_proc_name_ = paxos_proc_name; }
+      void setPaxosProcName(std::string paxos_proc_name) { paxos_proc_name_ = paxos_proc_name; setCluster(paxos_proc_name); setClusterRole(mako::convertCluster(paxos_proc_name));}
       void setPaxosConfigFile(const std::vector<std::string>& paxos_config_file) { paxos_config_file_ = paxos_config_file; }
       
       // Getters and setters for Paxos termination tracking

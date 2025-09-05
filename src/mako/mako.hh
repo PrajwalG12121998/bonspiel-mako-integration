@@ -93,7 +93,7 @@ static void print_system_info()
 }
 
 // init all threads
-static abstract_db* init() {
+static abstract_db* initWithDB() {
   auto& benchConfig = BenchmarkConfig::getInstance();
 
   //initialize_rust_wrapper();
@@ -355,14 +355,62 @@ static void register_paxos_leader_callback(vector<pair<uint32_t, uint32_t>>& adv
   thread_id);
 }
 
-static void setup_paxos_callbacks(TSharedThreadPoolMbta& tpool_mbta, 
-                                  vector<pair<uint32_t, uint32_t>>& advanceWatermarkTracker)
+static void setup_paxos_leader_callbacks(vector<pair<uint32_t, uint32_t>>& advanceWatermarkTracker)
 {
   if (!BenchmarkConfig::getInstance().getIsReplicated()) { return ; }
   for (int i = 0; i < BenchmarkConfig::getInstance().getNthreads(); i++) {
-    register_paxos_follower_callback(tpool_mbta, i);
     register_paxos_leader_callback(advanceWatermarkTracker, i);
   }
+}
+
+static void setup_paxos_follower_callbacks(TSharedThreadPoolMbta& tpool_mbta)
+{
+  if (!BenchmarkConfig::getInstance().getIsReplicated()) { return ; }
+    for (int i = 0; i < BenchmarkConfig::getInstance().getNthreads(); i++) {
+      register_paxos_follower_callback(tpool_mbta, i);
+    }
+}
+
+static void run_latency_tracking()
+{
+  auto& benchConfig = BenchmarkConfig::getInstance();
+  int leader_config = benchConfig.getLeaderConfig();
+#if defined(TRACKING_LATENCY)
+  if(leader_config) {
+        const auto& advanceWatermarkTracker = benchConfig.getAdvanceWatermarkTracker();
+        uint32_t latency_ts = 0;
+        std::map<uint32_t, uint32_t> ordered(sample_transaction_tracker.begin(),
+                                                           sample_transaction_tracker.end());
+        int valid_cnt = 0;
+        std::vector<float> latencyVector ;
+        for (auto it: ordered) {  // cid => updated time
+            int i = 0;
+            for (; i < advanceWatermarkTracker.size(); i++) { // G => updated time
+                if (advanceWatermarkTracker[i].first >= it.first) break;
+            }
+            if (i < advanceWatermarkTracker.size() && advanceWatermarkTracker[i].first >= it.first) {
+                latency_ts += advanceWatermarkTracker[i].second - it.second;
+                latencyVector.emplace_back(advanceWatermarkTracker[i].second - it.second) ;
+                valid_cnt++;
+                // std::cout << "Transaction: " << it.first << " takes "
+                //          << (advanceWatermarkTracker[i].second - it.second) << " ms" 
+                //          << ", end_time: " << advanceWatermarkTracker[i].second 
+                //          << ", st_time: " << it.second << std::endl;
+            } else { // incur only for last several transactions
+
+            }
+        }
+        if (latencyVector.size() > 0) {
+            std::cout << "averaged latency: " << latency_ts / valid_cnt << std::endl;
+            std::sort (latencyVector.begin(), latencyVector.end());
+            std::cout << "10% latency: " << latencyVector[(int)(valid_cnt *0.1)]  << std::endl;
+            std::cout << "50% latency: " << latencyVector[(int)(valid_cnt *0.5)]  << std::endl;
+            std::cout << "90% latency: " << latencyVector[(int)(valid_cnt *0.9)]  << std::endl;
+            std::cout << "95% latency: " << latencyVector[(int)(valid_cnt *0.95)]  << std::endl;
+            std::cout << "99% latency: " << latencyVector[(int)(valid_cnt *0.99)]  << std::endl;
+        }
+  }
+#endif
 }
 
 static void wait_for_termination()
@@ -379,6 +427,9 @@ static void wait_for_termination()
       Notice("follower is waiting for being ended: %d/%zu, noops_cnt:%d, replay_batch:%d\n", benchConfig.getEndReceived(), benchConfig.getNthreads(), sync_util::sync_logger::noops_cnt.load(), benchConfig.getReplayBatch());
     //if (benchConfig.getEndReceived() > 0) {std::quick_exit( EXIT_SUCCESS );}
   }
+
+  // Track and report latency if configured if tracked
+  run_latency_tracking();
 }
 
 static void setup_sync_util_callbacks()
@@ -437,7 +488,7 @@ static void setup_transport_callbacks()
   });
 }
 
-static void setup_leader_election_callback()
+static void setup_leader_election_callbacks()
 {
   register_leader_election_callback([&](int control) { // communicate with third party: Paxos
     // happens on the learner for case 0 and case 2, 3
@@ -553,46 +604,38 @@ static void cleanup_and_shutdown()
   std::quick_exit( EXIT_SUCCESS );
 }
 
-static void run_latency_tracking()
+static char** prepare_paxos_args(const vector<string>& paxos_config_file,
+  const string paxos_proc_name)
 {
-  auto& benchConfig = BenchmarkConfig::getInstance();
-  int leader_config = benchConfig.getLeaderConfig();
-#if defined(TRACKING_LATENCY)
-  if(leader_config) {
-        const auto& advanceWatermarkTracker = benchConfig.getAdvanceWatermarkTracker();
-        uint32_t latency_ts = 0;
-        std::map<uint32_t, uint32_t> ordered(sample_transaction_tracker.begin(),
-                                                           sample_transaction_tracker.end());
-        int valid_cnt = 0;
-        std::vector<float> latencyVector ;
-        for (auto it: ordered) {  // cid => updated time
-            int i = 0;
-            for (; i < advanceWatermarkTracker.size(); i++) { // G => updated time
-                if (advanceWatermarkTracker[i].first >= it.first) break;
-            }
-            if (i < advanceWatermarkTracker.size() && advanceWatermarkTracker[i].first >= it.first) {
-                latency_ts += advanceWatermarkTracker[i].second - it.second;
-                latencyVector.emplace_back(advanceWatermarkTracker[i].second - it.second) ;
-                valid_cnt++;
-                // std::cout << "Transaction: " << it.first << " takes "
-                //          << (advanceWatermarkTracker[i].second - it.second) << " ms" 
-                //          << ", end_time: " << advanceWatermarkTracker[i].second 
-                //          << ", st_time: " << it.second << std::endl;
-            } else { // incur only for last several transactions
-
-            }
-        }
-        if (latencyVector.size() > 0) {
-            std::cout << "averaged latency: " << latency_ts / valid_cnt << std::endl;
-            std::sort (latencyVector.begin(), latencyVector.end());
-            std::cout << "10% latency: " << latencyVector[(int)(valid_cnt *0.1)]  << std::endl;
-            std::cout << "50% latency: " << latencyVector[(int)(valid_cnt *0.5)]  << std::endl;
-            std::cout << "90% latency: " << latencyVector[(int)(valid_cnt *0.9)]  << std::endl;
-            std::cout << "95% latency: " << latencyVector[(int)(valid_cnt *0.95)]  << std::endl;
-            std::cout << "99% latency: " << latencyVector[(int)(valid_cnt *0.99)]  << std::endl;
-        }
-  }
-#endif
+  int argc_paxos = 18;
+  int kPaxosBatchSize = 50000; 
+  char **argv_paxos = new char*[argc_paxos];
+  int k = 0;
+  
+  argv_paxos[0] = (char *) "";
+  argv_paxos[1] = (char *) "-b";
+  argv_paxos[2] = (char *) "-d";
+  argv_paxos[3] = (char *) "60";
+  argv_paxos[4] = (char *) "-f";
+  argv_paxos[5] = (char *) paxos_config_file[k++].c_str();
+  argv_paxos[6] = (char *) "-f";
+  argv_paxos[7] = (char *) paxos_config_file[k++].c_str();
+  argv_paxos[8] = (char *) "-t";
+  argv_paxos[9] = (char *) "30";
+  argv_paxos[10] = (char *) "-T";
+  argv_paxos[11] = (char *) "100000";
+  argv_paxos[12] = (char *) "-n";
+  argv_paxos[13] = (char *) "32";
+  argv_paxos[14] = (char *) "-P";
+  argv_paxos[15] = (char *) paxos_proc_name.c_str();
+  argv_paxos[16] = (char *) "-A";
+  argv_paxos[17] = new char[20];
+  memset(argv_paxos[17], '\0', 20);
+  sprintf(argv_paxos[17], "%d", kPaxosBatchSize);
+  
+  return argv_paxos;
 }
+
+
 
 #endif

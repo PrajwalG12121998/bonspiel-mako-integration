@@ -7,7 +7,6 @@ using namespace util;
 
 static void parse_command_line_args(int argc, 
                                     char **argv, 
-                                    string& paxos_proc_name,
                                     int &is_micro,
                                     int &is_replicated,
                                     string& site_name,
@@ -41,7 +40,6 @@ static void parse_command_line_args(int argc,
     case 't': {
       auto& config = BenchmarkConfig::getInstance();
       config.setNthreads(strtoul(optarg, NULL, 10));
-      config.setScaleFactor(strtod(optarg, NULL));
       ALWAYS_ASSERT(config.getNthreads() > 0);
       }
       break;
@@ -59,9 +57,7 @@ static void parse_command_line_args(int argc,
 
     case 'P': {
       auto& config = BenchmarkConfig::getInstance();
-      paxos_proc_name = string(optarg);
-      config.setCluster(paxos_proc_name);
-      config.setClusterRole(mako::convertCluster(paxos_proc_name));
+      config.setPaxosProcName(string(optarg));
       }
       break;
     
@@ -86,8 +82,7 @@ static void parse_command_line_args(int argc,
   }
 }
 
-static void handle_new_config_format(const string& site_name,
-                                    string& paxos_proc_name)
+static void handle_new_config_format(const string& site_name)
 {
   auto& benchConfig = BenchmarkConfig::getInstance();
   auto site = benchConfig.getConfig()->GetSiteByName(site_name);
@@ -101,105 +96,61 @@ static void handle_new_config_format(const string& site_name,
   
   // Set cluster role for compatibility
   if (site->is_leader) {
-    benchConfig.setCluster(mako::LOCALHOST_CENTER);
-    benchConfig.setClusterRole(mako::LOCALHOST_CENTER_INT);
-    paxos_proc_name = mako::LOCALHOST_CENTER;
+    benchConfig.setPaxosProcName(mako::LOCALHOST_CENTER);
   } else if (site->replica_idx == 1) {
-    benchConfig.setCluster(mako::P1_CENTER);
-    benchConfig.setClusterRole(mako::P1_CENTER_INT);
-    paxos_proc_name = mako::P1_CENTER;
+    benchConfig.setPaxosProcName(mako::P1_CENTER);
   } else if (site->replica_idx == 2) {
-    benchConfig.setCluster(mako::P2_CENTER);
-    benchConfig.setClusterRole(mako::P2_CENTER_INT);
-    paxos_proc_name = mako::P2_CENTER;
+    benchConfig.setPaxosProcName(mako::P2_CENTER);
   } else {
-    benchConfig.setCluster(mako::LEARNER_CENTER);
-    benchConfig.setClusterRole(mako::LEARNER_CENTER_INT);
-    paxos_proc_name = mako::LEARNER_CENTER;
+    benchConfig.setPaxosProcName(mako::LEARNER_CENTER);
   }
   
   Notice("Site %s: shard=%d, replica_idx=%d, is_leader=%d, cluster=%s", 
          site_name.c_str(), site->shard_id, site->replica_idx, site->is_leader, benchConfig.getCluster().c_str());
 }
 
-
-
-static char** prepare_paxos_args(const vector<string>& paxos_config_file,
-                                const string& paxos_proc_name,
-                                int kPaxosBatchSize)
-{
-  int argc_paxos = 18;
-  char **argv_paxos = new char*[argc_paxos];
-  int k = 0;
-  
-  argv_paxos[0] = (char *) "";
-  argv_paxos[1] = (char *) "-b";
-  argv_paxos[2] = (char *) "-d";
-  argv_paxos[3] = (char *) "60";
-  argv_paxos[4] = (char *) "-f";
-  argv_paxos[5] = (char *) paxos_config_file[k++].c_str();
-  argv_paxos[6] = (char *) "-f";
-  argv_paxos[7] = (char *) paxos_config_file[k++].c_str();
-  argv_paxos[8] = (char *) "-t";
-  argv_paxos[9] = (char *) "30";
-  argv_paxos[10] = (char *) "-T";
-  argv_paxos[11] = (char *) "100000";
-  argv_paxos[12] = (char *) "-n";
-  argv_paxos[13] = (char *) "32";
-  argv_paxos[14] = (char *) "-P";
-  argv_paxos[15] = (char *) paxos_proc_name.c_str();
-  argv_paxos[16] = (char *) "-A";
-  argv_paxos[17] = new char[20];
-  memset(argv_paxos[17], '\0', 20);
-  sprintf(argv_paxos[17], "%d", kPaxosBatchSize);
-  
-  return argv_paxos;
-}
-
-
-
-static void run_workers(int leader_config, abstract_db* db, TSharedThreadPoolMbta& tpool_mbta)
+static void run_workers(abstract_db* db)
 {
   auto& benchConfig = BenchmarkConfig::getInstance();
-  if (leader_config) { // leader cluster
-    bench_runner *r = start_workers_tpcc(leader_config, db, benchConfig.getNthreads());
-    start_workers_tpcc(leader_config, db, benchConfig.getNthreads(), false, 1, r);
-    delete db;
-  } else if (benchConfig.getCluster().compare(mako::LEARNER_CENTER)==0) { // learner cluster
-    abstract_db * db = tpool_mbta.getDBWrapper(benchConfig.getNthreads())->getDB () ;
-    bench_runner *r = start_workers_tpcc(1, db, benchConfig.getNthreads(), true);
-    modeMonitor(db, benchConfig.getNthreads(), r) ;
-  }
+  bench_runner *r = start_workers_tpcc(benchConfig.getLeaderConfig(), db, benchConfig.getNthreads());
+  start_workers_tpcc(benchConfig.getLeaderConfig(), db, benchConfig.getNthreads(), false, 1, r);
+  delete db;
 }
-
 
 int
 main(int argc, char **argv)
 {
+
+  // Parameters prepared
   int is_micro = 0;  // Flag for micro benchmark mode
   int is_replicated = 0;  // if use Paxos to replicate
-  std::string paxos_proc_name = mako::LOCALHOST_CENTER;
   vector<string> paxos_config_file{};
   string site_name = "";  // For new config format
 
   auto& benchConfig = BenchmarkConfig::getInstance();
   // Parse command line arguments
-  parse_command_line_args(argc, argv, paxos_proc_name, is_micro, is_replicated, site_name, paxos_config_file);
+  parse_command_line_args(argc, argv, is_micro, is_replicated, site_name, paxos_config_file);
 
   // Handle new configuration format if site name is provided
   if (!site_name.empty() && benchConfig.getConfig() != nullptr) {
-    handle_new_config_format(site_name, paxos_proc_name);
+    handle_new_config_format(site_name);
   }
 
   benchConfig.setIsMicro(is_micro);
   benchConfig.setIsReplicated(is_replicated);
-  benchConfig.setPaxosProcName(paxos_proc_name);
   benchConfig.setPaxosConfigFile(paxos_config_file);
+  
+  // Setup callbacks
+  setup_sync_util_callbacks();
 
-  abstract_db * db = init();
+  if (benchConfig.getIsReplicated())  { // failures handling callbacks
+    setup_transport_callbacks();
+    setup_leader_election_callbacks();
+  }
 
+  // tpool_mbta is db-instance wrapper if replicated is enabled && on followers/learners
   TSharedThreadPoolMbta tpool_mbta (benchConfig.getNthreads()+1);
-  if (!benchConfig.getLeaderConfig()) { // initialize tables on follower replicas
+  if (!benchConfig.getLeaderConfig()) {
     abstract_db * db = tpool_mbta.getDBWrapper(benchConfig.getNthreads())->getDB () ;
     // pre-initialize all tables to avoid table creation data race
     for (int i=0;i<((size_t)benchConfig.getScaleFactor())*11+1;i++) {
@@ -207,37 +158,33 @@ main(int argc, char **argv)
     }
   }
 
-  // Prepare Paxos arguments
-  int kPaxosBatchSize = 50000;
-  if (benchConfig.getPaxosConfigFile().size() < 2) {
-      cerr << "no enough paxos config files" << endl;
-      return 1;
-  }
-  char** argv_paxos = prepare_paxos_args(benchConfig.getPaxosConfigFile(), paxos_proc_name, kPaxosBatchSize);
-  
-  // Setup callbacks
-  setup_sync_util_callbacks();
-  setup_transport_callbacks();
-  setup_leader_election_callback();
-
   if (BenchmarkConfig::getInstance().getIsReplicated()) {
+    char** argv_paxos = prepare_paxos_args(benchConfig.getPaxosConfigFile(), benchConfig.getPaxosProcName());
     std::vector<std::string> ret = setup(18, argv_paxos);
     if (ret.empty()) {
       return -1;
     }
 
-    // Setup Paxos callbacks - MUST be after setup() is called
-    setup_paxos_callbacks(tpool_mbta, benchConfig.getAdvanceWatermarkTracker());
+    // Setup Paxos callbacks have to be after setup() is called
+    setup_paxos_leader_callbacks(benchConfig.getAdvanceWatermarkTracker());
+    setup_paxos_follower_callbacks(tpool_mbta);
 
     int ret2 = setup2(0, benchConfig.getShardIndex());
     sleep(3); // ensure that all get started
+
+    // start a monitor on learner
+    if (benchConfig.getCluster().compare(mako::LEARNER_CENTER)==0) { // learner cluster
+      abstract_db * db = tpool_mbta.getDBWrapper(benchConfig.getNthreads())->getDB () ;
+      bench_runner *r = start_workers_tpcc(1, db, benchConfig.getNthreads(), true);
+      modeMonitor(db, benchConfig.getNthreads(), r) ;
+    }
   }
 
-  // Run worker threads
-  run_workers(benchConfig.getLeaderConfig(), db, tpool_mbta);
-
-  // Track and report latency if configured
-  run_latency_tracking();
+  abstract_db * db = initWithDB();
+  // Run worker threads on the leader
+  if (benchConfig.getLeaderConfig()) {
+    run_workers(db);
+  }
 
   // Wait for termination if not a leader
   if (!benchConfig.getLeaderConfig()) {
