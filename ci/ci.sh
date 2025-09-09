@@ -28,6 +28,10 @@ run_1shard_replication() {
     bash ./examples/test_1shard_replication.sh
 }
 
+run_2shard_replication() {
+    bash ./examples/test_1shard_replication.sh
+}
+
 run_1shard_replication_simple() {
     bash ./examples/test_1shard_replication_simple.sh
 }
@@ -49,6 +53,9 @@ case "${1:-}" in
     shard1Replication)
         run_1shard_replication
         ;;
+    shard2Replication)
+        run_2shard_replication
+        ;;
     shard1ReplicationSimple)
         run_1shard_replication_simple
         ;;
@@ -59,6 +66,7 @@ case "${1:-}" in
         run_simple_paxos
         run_2shard_no_replication
         run_1shard_replication
+        run_2shard_replication
         run_1shard_replication_simple
         echo "All CI steps completed successfully!"
         ;;
