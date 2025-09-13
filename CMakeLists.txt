@@ -718,3 +718,51 @@ add_apps(paxos_async_commit_test src/mako/benchmarks/paxos_async_commit_test.cc)
 add_apps(basic src/mako/benchmarks/ut/basic.cc)
 add_apps(erpc_client src/mako/benchmarks/ut/erpc_client.cc)
 add_apps(erpc_server src/mako/benchmarks/ut/erpc_server.cc)
+
+# RPC benchmark binary
+add_executable(rpcbench test/rpcbench.cc test/benchmark_service.cc)
+target_include_directories(rpcbench PRIVATE
+    src
+    src/rrr
+    test
+)
+target_compile_options(rpcbench PRIVATE ${BENCH_CXXFLAGS})
+target_link_libraries(rpcbench
+    rrr
+    memdb
+    pthread
+    ${BENCH_LDFLAGS}
+    ${LIBEVENT_LDFLAGS}
+)
+
+# Build the necessary RRR and memdb libraries for rpcbench
+file(GLOB RRR_BENCH_SRC
+    "src/rrr/base/*.cpp"
+    "src/rrr/misc/*.cpp"
+    "src/rrr/rpc/*.cpp"
+    "src/rrr/reactor/*.cc"
+)
+
+# Add RRR library if not already built
+if(NOT TARGET rrr)
+    add_library(rrr STATIC ${RRR_BENCH_SRC})
+    target_include_directories(rrr PUBLIC
+        src
+        src/rrr
+    )
+    target_compile_options(rrr PUBLIC ${BENCH_CXXFLAGS})
+    target_link_libraries(rrr pthread ${Boost_LIBRARIES})
+endif()
+
+# Add memdb library if not already built
+if(NOT TARGET memdb)
+    file(GLOB MEMDB_BENCH_SRC "src/memdb/*.cc")
+    add_library(memdb STATIC ${MEMDB_BENCH_SRC})
+    target_include_directories(memdb PUBLIC
+        src
+        src/rrr
+        src/memdb
+    )
+    target_compile_options(memdb PUBLIC ${BENCH_CXXFLAGS})
+    target_link_libraries(memdb rrr pthread)
+endif()

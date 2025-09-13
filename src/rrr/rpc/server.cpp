@@ -100,12 +100,8 @@ ServerConnection::~ServerConnection() {
 }
 
 int ServerConnection::run_async(const std::function<void()>& f) {
-//  verify(0);
-//  return 0;
-// disable async run
-  verify(0);
-  return 0;
-//  return server_->threadpool_->run_async(f);
+  // Enable async run using the thread pool
+  return server_->threadpool_->run_async(f);
 }
 
 void ServerConnection::begin_reply(Request* req, i32 error_code /* =... */) {
@@ -365,7 +361,6 @@ struct start_server_loop_args_type {
 };
 
 void* Server::start_server_loop(void* arg) {
-  verify(0);
     start_server_loop_args_type* start_server_loop_args = (start_server_loop_args_type*) arg;
     start_server_loop_args->server->server_loop(start_server_loop_args->svr_addr);
     freeaddrinfo(start_server_loop_args->gai_result);
