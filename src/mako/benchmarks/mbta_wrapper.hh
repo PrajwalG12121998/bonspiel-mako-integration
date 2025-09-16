@@ -157,8 +157,6 @@ public:
 #if OP_LOGGING
     mt_put++;
 #endif
-    // TODO: there's an overload of put that takes non-const std::string and silo seems to use move for those.
-    // may be worth investigating if we can use that optimization to avoid copying keys
     STD_OP({
         mbta.transPut(key, StringWrapper(value));
         return 0;

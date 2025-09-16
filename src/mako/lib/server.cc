@@ -568,13 +568,15 @@ namespace mako
 
     void ShardServer::Run()
     {
-        while(true) {
+        while (true) {
             queue->suspend();
 
-            while (!queue->is_req_buffer_empty()) {
+            while (true) {
                 erpc::ReqHandle *handle;
                 size_t msg_size;
-                queue->fetch_one_req(&handle, msg_size); /* for the requst, msg_size is 0*/
+                if (!queue->fetch_one_req(&handle, msg_size)) {
+                    break;
+                }
                 if (!handle) {
                     Panic("the pointer is invalid, p:%s, rIdx:%d, wIdx:%d, count:%d",
                             (void*)handle,
@@ -586,7 +588,10 @@ namespace mako
                                                reinterpret_cast<char *>(handle->get_req_msgbuf()->buf_),
                                                reinterpret_cast<char *>(handle->pre_resp_msgbuf_.buf_));
                 queue_response->add_one_req(handle, msgLen);
-                //queue->free_one_req();
+            }
+
+            if (queue->should_stop()) {
+                break;
             }
         }
     }

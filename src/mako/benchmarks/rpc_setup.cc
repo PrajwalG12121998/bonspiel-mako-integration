@@ -131,6 +131,17 @@ void mako::setup_helper(
   }
 }
 
+void mako::stop_helper()
+{
+  auto &cfg = BenchmarkConfig::getInstance();
+  auto &queue_holders = cfg.getQueueHolders();
+  for (auto &entry : queue_holders) {
+    if (entry.second) {
+      entry.second->request_stop();
+    }
+  }
+}
+
 void mako::setup_erpc_server()
 {
   auto &cfg = BenchmarkConfig::getInstance();

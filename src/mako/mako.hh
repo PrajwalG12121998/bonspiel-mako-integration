@@ -24,6 +24,7 @@
 #include "benchmarks/common.h"
 #include "benchmarks/common2.h"
 #include "benchmarks/benchmark_config.h"
+#include "benchmarks/rpc_setup.h"
 
 #include "deptran/s_main.h"
 
@@ -35,7 +36,6 @@
 
 
 // Initialize Rust wrapper: communicate with rust-based redis client
-// @safe
 static void initialize_rust_wrapper()
 {
   RustWrapper* g_rust_wrapper = new RustWrapper();
@@ -704,6 +704,8 @@ static void db_close() {
   auto& benchConfig = BenchmarkConfig::getInstance();
   if (benchConfig.getLeaderConfig())
     send_end_signal();
+
+  mako::stop_helper();
 
   // Wait for termination if not a leader
   if (!benchConfig.getLeaderConfig()) {

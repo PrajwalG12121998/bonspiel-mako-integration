@@ -24,6 +24,9 @@ void setup_helper(
   const std::map<std::string, std::vector<abstract_ordered_index *>> &partitions,
   const std::map<std::string, std::vector<abstract_ordered_index *>> &remote_partitions*/);
 
+// Signal helper threads to stop processing requests.
+void stop_helper();
+
 // Launch eRPC server threads and wire up per-warehouse queues.
 void setup_erpc_server();
 

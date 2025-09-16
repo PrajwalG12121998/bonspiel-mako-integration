@@ -747,26 +747,29 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
           pos += sizeof(uint32_t);
 
           instance->update_ptr(pos);
-          //int outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
-          //if (outstanding>20){
-          //  usleep(10*1000); // wait 1 Paxos log time 
-          //}
+
+          /*
+          int outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
+          if (outstanding>20){
+           usleep(10*1000); // wait 1 Paxos log time 
+          }
            
-        //   while ((TThread::sclient == NULL) || !TThread::sclient->stopped) {
-        //     if (outstanding>20) {
-        //         usleep(50);
-        //     } else {
-        //         break;
-        //     }
-        //     outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
-        //   }
-        //   Warning("outstanding request: %d, par_id: %d", outstanding, TThread::getPartitionID ());
+          while ((TThread::sclient == NULL) || !TThread::sclient->stopped) {
+            if (outstanding>20) {
+                usleep(50);
+            } else {
+                break;
+            }
+            outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
+          }
+          Warning("outstanding request: %d, par_id: %d", outstanding, TThread::getPartitionID ());
           
           // deal with logs from its corresponding threads
-        //   if (TThread::in_loading_phase){
-        //     Warning("add a log to nc, par_id:%d,", TThread::getPartitionID());
-        //     usleep(10*1000);
-        //   }
+          if (TThread::in_loading_phase){
+            Warning("add a log to nc, par_id:%d,", TThread::getPartitionID());
+            usleep(10*1000);
+          }*/
+
         // FIX me: merge the logs from helper threads instead of a separate log
         add_log_to_nc((char *)queueLog, pos, TThread::getPartitionID (), batch_size); // the partitionID for the helper thread
       }
