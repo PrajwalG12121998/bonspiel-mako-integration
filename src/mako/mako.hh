@@ -7,6 +7,7 @@
 #include <utility>
 #include <string>
 #include <set>
+#include "rocksdb_persistence_fwd.h"
 
 #include <getopt.h>
 #include <stdlib.h>
@@ -668,6 +669,25 @@ static void init_env(TSharedThreadPoolMbta& replicated_db) {
 
     int ret2 = setup2(0, benchConfig.getShardIndex());
     sleep(3); // ensure that all get started
+    
+#ifndef DISABLE_DISK
+    // Initialize RocksDB persistence layer ONLY on the leader
+    // Followers and learners don't need RocksDB since they only replay, not generate logs
+    if (benchConfig.getIsReplicated() && benchConfig.getLeaderConfig()) {
+      auto& persistence = mako::RocksDBPersistence::getInstance();
+      std::string db_path = "/tmp/mako_rocksdb_shard" + std::to_string(benchConfig.getShardIndex())
+                            + "_leader_pid" + std::to_string(getpid());
+      fprintf(stderr, "Leader initializing RocksDB at path: %s\n", db_path.c_str());
+      if (!persistence.initialize(db_path, 6)) {  // 6 worker threads for better throughput
+          fprintf(stderr, "WARNING: RocksDB initialization failed for %s\n", db_path.c_str());
+      }
+    }
+#else
+    // Disk persistence disabled by DISABLE_DISK flag
+    if (benchConfig.getIsReplicated() && benchConfig.getLeaderConfig()) {
+      fprintf(stderr, "Disk persistence disabled by DISABLE_DISK flag\n");
+    }
+#endif
 
     // start a failure monitor on learners
     if (benchConfig.getCluster().compare(mako::LEARNER_CENTER)==0) { // learner cluster

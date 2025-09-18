@@ -10,6 +10,7 @@ echo "========================================="
 # Clean up old log files
 rm -f nfs_sync_*
 rm -f simple-shard0*.log simple-shard1*.log
+rm -rf /tmp/mako_rocksdb_shard*
 
 ps aux | grep -i dbtest | awk "{print \$2}" | xargs kill -9 2>/dev/null
 ps aux | grep -i simplePaxos | awk "{print \$2}" | xargs kill -9 2>/dev/null

@@ -14,6 +14,7 @@ ps aux | grep -i dbtest | awk "{print \$2}" | xargs kill -9 2>/dev/null
 ps aux | grep -i simplePaxos | awk "{print \$2}" | xargs kill -9 2>/dev/null
 # Clean up old log files
 rm -f shard0*.log nfs_sync_*
+rm -rf /tmp/mako_rocksdb_shard*
 
 # Start shard 0 in background
 echo "Starting shard 0..."

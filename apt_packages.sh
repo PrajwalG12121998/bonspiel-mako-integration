@@ -22,6 +22,7 @@ sudo apt-get --assume-yes install -y libprotobuf-dev
 sudo apt-get --assume-yes install libyaml-cpp-dev
 sudo apt-get --assume-yes install python2 #remove?
 sudo apt-get --assume-yes install sshpass
+sudo apt-get --assume-yes install librocksdb-dev
 
 sudo apt-get --assume-yes install build-essential cmake gcc libudev-dev libnl-3-dev  
 sudo apt-get --assume-yes install libnl-route-3-dev ninja-build pkg-config valgrind python3-dev

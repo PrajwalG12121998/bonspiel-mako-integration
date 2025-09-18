@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "compiler.hh"
+#include "rocksdb_persistence_fwd.h"
 // #include "small_vector.hh"
 #include "TRcu.hh"
 #include <algorithm>
@@ -11,8 +12,8 @@
 #include <unistd.h>
 #include <iostream>
 #include <sstream>
-#include <x86intrin.h>
 #include <atomic>
+#include <x86intrin.h>
 #include <vector>
 #include <cstring> // for memcpy
 #include "deptran/s_main.h"
@@ -135,6 +136,28 @@ class StringAllocator{
         pos += sizeof(uint32_t);
         //Warning("Paxos log cleanup!max_bytes_size:%d",max_bytes_size);
         add_log_to_nc((char *)queueLog, pos, TThread::getPartitionID (), batch_size);
+
+#ifndef DISABLE_DISK
+        // Asynchronously persist to RocksDB
+        auto& persistence = mako::RocksDBPersistence::getInstance();
+        uint32_t shard_id = BenchmarkConfig::getInstance().getShardIndex();
+        static std::atomic<uint64_t> persist_success_count{0};
+        static std::atomic<uint64_t> persist_fail_count{0};
+        persistence.persistAsync((const char*)queueLog, pos, shard_id, TThread::getPartitionID(),
+            [](bool success) {
+                if (success) {
+                    persist_success_count.fetch_add(1, std::memory_order_relaxed);
+                    if (persist_success_count % 1000 == 0) {
+                        std::cout << "[RocksDB] Persisted " << persist_success_count.load()
+                                  << " transaction logs to disk" << std::endl;
+                    }
+                } else {
+                    persist_fail_count.fetch_add(1, std::memory_order_relaxed);
+                    std::cerr << "[RocksDB] Failed to persist log (total failures: "
+                              << persist_fail_count.load() << ")" << std::endl;
+                }
+            });
+#endif
     }
     freeMemory();
   };

@@ -1,5 +1,7 @@
 #include "Transaction.hh"
 #include <typeinfo>
+#include <atomic>
+#include <iostream>
 #include "MassTrans.hh"
 #include "deptran/s_main.h"
 #include "benchmarks/sto/sync_util.hh"
@@ -772,6 +774,28 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
 
         // FIX me: merge the logs from helper threads instead of a separate log
         add_log_to_nc((char *)queueLog, pos, TThread::getPartitionID (), batch_size); // the partitionID for the helper thread
+
+#ifndef DISABLE_DISK
+        // Asynchronously persist to RocksDB
+        auto& persistence = mako::RocksDBPersistence::getInstance();
+        uint32_t shard_id = BenchmarkConfig::getInstance().getShardIndex();
+        static std::atomic<uint64_t> helper_persist_success{0};
+        static std::atomic<uint64_t> helper_persist_fail{0};
+        persistence.persistAsync((const char*)queueLog, pos, shard_id, TThread::getPartitionID(),
+            [](bool success) {
+                if (success) {
+                    helper_persist_success.fetch_add(1, std::memory_order_relaxed);
+                    if (helper_persist_success % 1000 == 0) {
+                        std::cout << "[RocksDB Helper] Persisted " << helper_persist_success.load()
+                                  << " helper thread logs to disk" << std::endl;
+                    }
+                } else {
+                    helper_persist_fail.fetch_add(1, std::memory_order_relaxed);
+                    std::cerr << "[RocksDB Helper] Failed to persist log (total failures: "
+                              << helper_persist_fail.load() << ")" << std::endl;
+                }
+            });
+#endif
       }
       instance->resetMemory();
     }

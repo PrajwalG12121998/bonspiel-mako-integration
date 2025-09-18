@@ -188,6 +188,7 @@ option(DISABLE_MULTI_VERSION "Disable multi-version" OFF)
 option(MEGA_BENCHMARK "Enable MEGA benchmark" OFF)
 option(MEGA_BENCHMARK_MICRO "Enable MEGA benchmark micro" OFF)
 option(TRACKING_LATENCY "Enable latency tracking" OFF)
+option(DISABLE_DISK "Disable disk persistence" ON)
 option(FAIL_NEW_VERSION "Enable fail new version" ON)
 option(SIMULATE_ONE_SHARD_PER_THREAD "Simulate one shard per thread" OFF)
 option(TRACKING_ROLLBACK "Enable rollback tracking" OFF)
@@ -305,6 +306,9 @@ endif()
 if(TRACKING_LATENCY)
   list(APPEND CXXFLAGS -DTRACKING_LATENCY)
 endif()
+if(DISABLE_DISK)
+  list(APPEND CXXFLAGS -DDISABLE_DISK)
+endif()
 if(FAIL_NEW_VERSION)
   list(APPEND CXXFLAGS -DFAIL_NEW_VERSION)
 endif()
@@ -416,6 +420,7 @@ set(MAKO_SRCFILES
   "${W}/core.cc"
   "${W}/counter.cc"
   "${W}/memory.cc"
+  "${W}/rocksdb_persistence.cc"
   "${W}/rcu.cc"
   "${W}/stats_server.cc"
   "${W}/thread.cc"
@@ -681,7 +686,7 @@ function(add_apps exec_name exec_path)
   target_compile_options(${exec_name} PRIVATE ${BENCH_CXXFLAGS}) # include all flags
   
   # Link dbtest against mako library and dependencies
-  target_link_libraries(${exec_name} 
+  target_link_libraries(${exec_name}
       mako
       erpc
       rust_lib
@@ -691,6 +696,7 @@ function(add_apps exec_name exec_path)
       pthread
       numa
       event_pthreads
+      rocksdb
       ${LIBEVENT_LDFLAGS}
       ${GFLAGS_LDFLAGS}
       ${PROTOBUF_LDFLAGS}
@@ -705,6 +711,8 @@ add_apps(dbtest src/mako/benchmarks/dbtest.cc)
 add_apps(simpleTransaction examples/simpleTransaction.cc)
 add_apps(simpleTransactionRep examples/simpleTransactionRep.cc)
 add_apps(simplePaxos examples/simplePaxos.cc)
+add_apps(test_rocksdb_persistence examples/test_rocksdb_persistence.cc)
+add_apps(test_callback_demo examples/test_callback_demo.cc)
 
 # Enable borrow checking for dbtest
 set(ENABLE_BORROW_CHECKING ON CACHE BOOL "Enable borrow checking" FORCE)
