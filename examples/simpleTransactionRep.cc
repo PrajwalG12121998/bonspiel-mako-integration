@@ -41,15 +41,13 @@ public:
         for (size_t i = 0; i < 5; i++) {
             void *txn = db->new_txn(0, arena, txn_buf());
             std::string key = "test_key_" + std::to_string(i);
-            std::string value = "test_value_" + std::to_string(i) + 
-                               std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+            std::string value = mako::Encode("test_value_" + std::to_string(i));
             try {
-                table->put(txn, key, StringWrapper(value));
+                table->put(txn, key, value);
 
                 if (BenchmarkConfig::getInstance().getNshards()==2) {
                     std::string key2 = "test_key2_" + std::to_string(i);
-                    std::string value2 = "test_value2_" + std::to_string(i) + 
-                                    std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+                    std::string value2 = mako::Encode("test_value2_" + std::to_string(i));
                     remote_table->put(txn, key2, StringWrapper(value2)) ;
                 }
 

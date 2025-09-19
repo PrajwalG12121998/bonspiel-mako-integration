@@ -126,6 +126,30 @@ namespace mako
     const int BITS_OF_NODE = sizeof(struct Node);
     const int BITS_OF_TT = sizeof(uint32_t);
 
+    // Helper function to encode values with required metadata padding
+    inline std::string Encode(const std::string& value) {
+        // Create string with exact size needed - single allocation
+        std::string encoded_value;
+        encoded_value.resize(value.size() + EXTRA_BITS_FOR_VALUE, '\0');
+
+        // Copy the value to the beginning - single memory copy
+        std::memcpy(encoded_value.data(), value.data(), value.size());
+
+        // Initialize timestamp/term to 0 (already zeroed by resize)
+        uint32_t* time_term = reinterpret_cast<uint32_t*>(
+            encoded_value.data() + encoded_value.size() - EXTRA_BITS_FOR_VALUE);
+        *time_term = 0;  // Redundant but explicit
+
+        // Initialize Node structure
+        Node* node = reinterpret_cast<Node*>(
+            encoded_value.data() + encoded_value.size() - BITS_OF_NODE);
+        node->timestamp = 0;
+        node->data_size = 0;
+        node->data = nullptr;
+
+        return encoded_value;
+    }
+
     // --------------------------- for erpc APIs
     const uint8_t getReqType = 1;
     const uint8_t lockReqType = 2;

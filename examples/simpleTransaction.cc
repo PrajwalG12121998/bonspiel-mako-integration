@@ -32,13 +32,12 @@ public:
         for (size_t i = 0; i < 5; i++) {
             void *txn = db->new_txn(0, arena, txn_buf());
             std::string key = "test_key_" + std::to_string(i);
-            std::string value = "test_value_" + std::to_string(i) + 
-                               std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+            std::string value = mako::Encode("test_value_" + std::to_string(i));
             try {
                 if (i%2==0)
-                    table->put(txn, key, StringWrapper(value));
+                    table->put(txn, key, value);
                 else
-                    table2->put(txn, key, StringWrapper(value));
+                    table2->put(txn, key, value);
                 db->commit_txn(txn);
             } catch (abstract_db::abstract_abort_exception &ex) {
                 printf("Write aborted: %s\n", key.c_str());
@@ -97,9 +96,9 @@ public:
             void *txn = db->new_txn(0, arena, txn_buf());
             scoped_str_arena s_arena(arena);
             std::string key = "overwrite_key";
-            std::string value = "initial_2000" + std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+            std::string value = mako::Encode("initial_2000");
             try {
-                table->put(txn, key, StringWrapper(value));
+                table->put(txn, key, value);
                 db->commit_txn(txn);
             } catch (abstract_db::abstract_abort_exception &ex) {
                 printf("Write aborted: %s\n", key.c_str());
@@ -112,9 +111,9 @@ public:
             void *txn = db->new_txn(0, arena, txn_buf());
             scoped_str_arena s_arena(arena);
             std::string key = "overwrite_key";
-            std::string value = "updated_1000" + std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+            std::string value = mako::Encode("updated_1000");
             try {
-                table->put(txn, key, StringWrapper(value));
+                table->put(txn, key, value);
                 db->commit_txn(txn);
             } catch (abstract_db::abstract_abort_exception &ex) {
                 printf("Update aborted: %s\n", key.c_str());
@@ -126,9 +125,9 @@ public:
             void *txn = db->new_txn(0, arena, txn_buf());
             scoped_str_arena s_arena(arena);
             std::string key = "overwrite_key";
-            std::string value = "updated_0000" + std::string(mako::EXTRA_BITS_FOR_VALUE, 'B');
+            std::string value = mako::Encode("updated_0000");
             try {
-                table->put(txn, key, StringWrapper(value));
+                table->put(txn, key, value);
                 db->commit_txn(txn);
             } catch (abstract_db::abstract_abort_exception &ex) {
                 printf("Update aborted: %s\n", key.c_str());

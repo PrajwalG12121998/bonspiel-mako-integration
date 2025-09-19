@@ -35,7 +35,7 @@ public:
         for (size_t i=0; i < 5; i++) {
             void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
             std::string key = "key_XXXXXXXXXXXXX_" + std::to_string(i);
-            std::string value = "value_XXXXXXXXXXXXX_" + std::to_string(i)+std::string(mako::EXTRA_BITS_FOR_VALUE,'B');
+            std::string value = mako::Encode("value_XXXXXXXXXXXXX_" + std::to_string(i));
             try {
                 customerTable->put(txn, key, StringWrapper(value));
                 db->commit_txn(txn);
@@ -75,7 +75,7 @@ public:
             void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
             scoped_str_arena s_arena(arena);
             std::string key = "XXXXXXXXXXXX";
-            std::string value = "2000000000000000" + std::string(mako::EXTRA_BITS_FOR_VALUE,'B');
+            std::string value = mako::Encode("2000000000000000");
             try {
                 customerTable->put(txn, key, StringWrapper(value));
                 db->commit_txn(txn);
@@ -90,7 +90,7 @@ public:
             scoped_str_arena s_arena(arena);
             auto tmp = s_arena.get();
             std::string key = "XXXXXXXXXXXX";
-            std::string value = "1000000000000000" + std::string(mako::EXTRA_BITS_FOR_VALUE,'B');
+            std::string value = mako::Encode("1000000000000000");
             try {
                 customerTable->put(txn, key, StringWrapper(value));
                 db->commit_txn(txn);
@@ -127,11 +127,11 @@ public:
         // 0. load phase, load several (K,V) into table
         static abstract_ordered_index *customerTable = simple_tpcc_worker::OpenTablesForTablespace(db, "customer_0") ;  // shared Masstree instance
         std::string key = "XXXXXXXXXXXX1";
-        std::string value = "10000000XXX"+std::string(mako::EXTRA_BITS_FOR_VALUE,'B');;
+        std::string value = mako::Encode("10000000XXX");
         std::string key1 = "XXXXXXXXXXXX2";
-        std::string value1 = "20000000XXX"+std::string(mako::EXTRA_BITS_FOR_VALUE,'B');;
+        std::string value1 = mako::Encode("20000000XXX");
         std::string key2 = "XXXXXXXXXXXXXXX3";
-        std::string value2 = "30000000XXX"+std::string(mako::EXTRA_BITS_FOR_VALUE,'B');;
+        std::string value2 = mako::Encode("30000000XXX");
         {
             void *txn = db->new_txn(0, arena, txn_buf());
             scoped_str_arena s_arena(arena);
@@ -157,7 +157,7 @@ public:
             customerTable->shard_get(key, needV);
             //TThread::txn->print_stats();
             std::string needV2 = "";
-            value = "30000XXXXXX" +std::string(mako::EXTRA_BITS_FOR_VALUE,'B');;
+            value = mako::Encode("30000XXXXXX");
             customerTable->shard_put(key, value);
             auto valid=db->shard_validate();
             ASSERT_EQ(valid, 0);
@@ -204,7 +204,7 @@ public:
        for (size_t i=0; i < 5; i++) {
            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
            std::string key = "key_XXXXXXXXXXXXX_" + std::to_string(i);
-           std::string value = "value_XXXXXXXXXXXXX_" + std::to_string(i)+std::string(mako::EXTRA_BITS_FOR_VALUE,'B');
+           std::string value = mako::Encode("value_XXXXXXXXXXXXX_" + std::to_string(i));
            try {
                customerTable->put_mbta(txn, key, cmpFunc2_v3, value);
                db->commit_txn(txn);
