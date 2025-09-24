@@ -16,6 +16,7 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <random>
 
 // promise.timeout is abandoned
 #define GET_TIMEOUT 250
@@ -148,6 +149,14 @@ namespace mako
         node->data = nullptr;
 
         return encoded_value;
+    }
+
+    // Generate a random integer
+    inline int generateRandomInt() {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<int> dist(0, INT_MAX);
+        return dist(gen);
     }
 
     // --------------------------- for erpc APIs

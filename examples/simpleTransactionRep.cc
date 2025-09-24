@@ -9,45 +9,46 @@
 #include <mako.hh>
 #include "examples/common.h"
 #include "benchmarks/rpc_setup.h"
+#include "../src/mako/spinbarrier.h"
 
 using namespace std;
 using namespace mako;
 
+
 class TransactionWorker {
 public:
-    TransactionWorker(abstract_db *db) : db(db) {
+    TransactionWorker(abstract_db *db, int worker_id = 0)
+        : db(db), worker_id_(worker_id) {
         txn_obj_buf.reserve(str_arena::MinStrReserveLength);
         txn_obj_buf.resize(db->sizeof_txn_object(0));
     }
 
     void initialize() {
         scoped_db_thread_ctx ctx(db, false);
-        mbta_ordered_index::mbta_type::thread_init();
     }
 
     void test_basic_transactions() {
-        printf("\n--- Testing Basic Transactions ---\n");
-        
+        printf("\n--- Testing Basic Transactions Thread:%ld ---\n", std::this_thread::get_id());
+
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex() ;
-
+        worker_id_ = worker_id_ * 100 + home_shard_index ; 
         abstract_ordered_index *table = db->open_index("customer_0", home_shard_index);
-
         abstract_ordered_index *remote_table ;
         if (BenchmarkConfig::getInstance().getNshards()==2) {
             remote_table = db->open_index("customer_0", home_shard_index==0?1:0);
         }
-
-        // Write 5 keys
+        
+        // Write 5 keys - unique per worker to avoid contention
         for (size_t i = 0; i < 5; i++) {
             void *txn = db->new_txn(0, arena, txn_buf());
-            std::string key = "test_key_" + std::to_string(i);
-            std::string value = mako::Encode("test_value_" + std::to_string(i));
+            std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
+            std::string value = mako::Encode("test_value_w" + std::to_string(worker_id_) + "_" + std::to_string(i));
             try {
                 table->put(txn, key, value);
 
                 if (BenchmarkConfig::getInstance().getNshards()==2) {
-                    std::string key2 = "test_key2_" + std::to_string(i);
-                    std::string value2 = mako::Encode("test_value2_" + std::to_string(i));
+                    std::string key2 = "test_key2_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
+                    std::string value2 = mako::Encode("test_value2_w" + std::to_string(worker_id_) + "_" + std::to_string(i));
                     remote_table->put(txn, key2, StringWrapper(value2)) ;
                 }
 
@@ -63,13 +64,13 @@ public:
         bool all_reads_ok = true;
         for (size_t i = 0; i < 5; i++) {
             void *txn = db->new_txn(0, arena, txn_buf());
-            std::string key = "test_key_" + std::to_string(i);
+            std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = "";
             try {
                 table->get(txn, key, value);
                 db->commit_txn(txn);
                 
-                std::string expected = "test_value_" + std::to_string(i);
+                std::string expected = "test_value_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
                 if (value.substr(0, expected.length()) != expected) {
                     all_reads_ok = false;
                     break;
@@ -88,13 +89,13 @@ public:
             bool all_reads_ok = true;
             for (size_t i = 0; i < 5; i++) {
                 void *txn = db->new_txn(0, arena, txn_buf());
-                std::string key = "test_key2_" + std::to_string(i);
+                std::string key = "test_key2_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
                 std::string value = "";
                 try {
                     remote_table->get(txn, key, value);
                     db->commit_txn(txn);
                     
-                    std::string expected = "test_value2_" + std::to_string(i);
+                    std::string expected = "test_value2_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
                     if (value.substr(0, expected.length()) != expected) {
                         all_reads_ok = false;
                         break;
@@ -109,35 +110,60 @@ public:
             VERIFY(all_reads_ok, "Read and verify 5 records on remote shards");
         }
 
-        // Scan and verify table
-        auto scan_results = scan_tables(db, table);
-        std::cout<<"how many keys scanned:" << scan_results.size() << std::endl;
+        std::cout<<"Worker completed" << std::endl;
     }
 
 protected:
     abstract_db *const db;
+    int worker_id_;
     str_arena arena;
     std::string txn_obj_buf;
     inline void *txn_buf() { return (void *)txn_obj_buf.data(); }
 };
 
-void run_worker_tests(abstract_db *db) {
-    auto worker = new TransactionWorker(db);
+void run_worker_tests(abstract_db *db, int worker_id,
+                      spin_barrier *barrier_ready,
+                      spin_barrier *barrier_start) {
+    // Add thread ID to distinguish workers
+    printf("[Worker %d] Starting on thread %ld\n", worker_id, std::this_thread::get_id());
+
+    auto worker = new TransactionWorker(db, worker_id);
     worker->initialize();
+
+    // Ensure all workers complete initialization before proceeding
+    barrier_ready->count_down();
+    barrier_start->wait_for();
+
     worker->test_basic_transactions();
-    delete worker;
+
+    printf("[Worker %d] Completed\n", worker_id);
 }
 
 void run_tests(abstract_db* db) {
-    // start different db worker threads - enforced
+    // Pre-open tables ONCE before creating threads to avoid serialization
+    int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+    abstract_ordered_index *table = db->open_index("customer_0", home_shard_index);
+
+    abstract_ordered_index *remote_table = nullptr;
+    if (BenchmarkConfig::getInstance().getNshards() == 2) {
+        remote_table = db->open_index("customer_0", home_shard_index == 0 ? 1 : 0);
+    }
+
     size_t nthreads = BenchmarkConfig::getInstance().getNthreads();
     std::vector<std::thread> worker_threads;
-    
-    // Create a worker thread for each shard
+    worker_threads.reserve(nthreads);
+    spin_barrier barrier_ready(nthreads);
+    spin_barrier barrier_start(1);
+
     for (size_t i = 0; i < nthreads; ++i) {
-        worker_threads.emplace_back(run_worker_tests, db);
+        worker_threads.emplace_back(run_worker_tests, db, i,
+                                    &barrier_ready, &barrier_start);
     }
-    
+
+    // Release workers once every thread has created its ShardClient
+    barrier_ready.wait_for();
+    barrier_start.count_down();
+
     // Wait for all worker threads to complete
     for (auto& t : worker_threads) {
         t.join();
@@ -191,6 +217,7 @@ int main(int argc, char **argv) {
         int home_shard_index = benchConfig.getShardIndex() ;
 
         // pre-declare all local tables
+        // a table_name can be same on different shards
         abstract_ordered_index *table = db->open_index("customer_0", home_shard_index);
         abstract_ordered_index *table2 = db->open_index("customer_0", home_shard_index); // table and table2 are the exactly same table!
         abstract_ordered_index *table3 = db->open_index("customer_1", home_shard_index);
@@ -214,10 +241,12 @@ int main(int argc, char **argv) {
         run_tests(db);
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(10)); 
+    std::this_thread::sleep_for(std::chrono::seconds(5)); 
 
     db_close() ;
-    
+
     printf("\n" GREEN "All tests completed successfully!" RESET "\n");
+    std::cout.flush();
+
     return 0;
 }

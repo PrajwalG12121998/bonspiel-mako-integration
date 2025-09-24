@@ -713,6 +713,7 @@ add_apps(simpleTransactionRep examples/simpleTransactionRep.cc)
 add_apps(simplePaxos examples/simplePaxos.cc)
 add_apps(test_rocksdb_persistence examples/test_rocksdb_persistence.cc)
 add_apps(test_callback_demo examples/test_callback_demo.cc)
+add_apps(test_ordered_callbacks examples/test_ordered_callbacks.cc)
 
 # Enable borrow checking for dbtest
 set(ENABLE_BORROW_CHECKING ON CACHE BOOL "Enable borrow checking" FORCE)

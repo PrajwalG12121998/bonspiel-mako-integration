@@ -785,10 +785,8 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
             [](bool success) {
                 if (success) {
                     helper_persist_success.fetch_add(1, std::memory_order_relaxed);
-                    if (helper_persist_success % 1000 == 0) {
-                        std::cout << "[RocksDB Helper] Persisted " << helper_persist_success.load()
+                    std::cout << "[RocksDB Helper] Persisted " << helper_persist_success.load()
                                   << " helper thread logs to disk" << std::endl;
-                    }
                 } else {
                     helper_persist_fail.fetch_add(1, std::memory_order_relaxed);
                     std::cerr << "[RocksDB Helper] Failed to persist log (total failures: "

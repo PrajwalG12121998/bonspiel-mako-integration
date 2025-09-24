@@ -19,7 +19,6 @@ public:
 
     void initialize() {
         scoped_db_thread_ctx ctx(db, false);
-        mbta_ordered_index::mbta_type::thread_init();
     }
 
     void test_basic_transactions() {

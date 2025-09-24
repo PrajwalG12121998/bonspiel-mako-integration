@@ -680,6 +680,9 @@ static void init_env(TSharedThreadPoolMbta& replicated_db) {
       fprintf(stderr, "Leader initializing RocksDB at path: %s\n", db_path.c_str());
       if (!persistence.initialize(db_path, 6)) {  // 6 worker threads for better throughput
           fprintf(stderr, "WARNING: RocksDB initialization failed for %s\n", db_path.c_str());
+      } else {
+          // Now that Paxos is initialized, update the epoch
+          persistence.setEpoch(get_epoch());
       }
     }
 #else
@@ -722,7 +725,7 @@ static void send_end_signal() {
 
 static void db_close() {
   auto& benchConfig = BenchmarkConfig::getInstance();
-  if (benchConfig.getLeaderConfig())
+  if (benchConfig.getLeaderConfig() && benchConfig.getIsReplicated())
     send_end_signal();
 
   mako::stop_helper();
@@ -733,7 +736,8 @@ static void db_close() {
   }
 
   // Cleanup and shutdown
-  cleanup_and_shutdown();
+  if (benchConfig.getIsReplicated())
+    cleanup_and_shutdown();
 }
 
 #endif

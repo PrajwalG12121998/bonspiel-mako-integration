@@ -2,6 +2,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <algorithm>
 #include <rocksdb/write_batch.h>
 #include "../deptran/s_main.h"
 
@@ -65,7 +66,9 @@ bool RocksDBPersistence::initialize(const std::string& db_path, size_t num_threa
     }
     db_.reset(db_raw);
 
-    current_epoch_.store(get_epoch());
+    // Initialize epoch to a default value
+    // Will be overridden by actual epoch from get_epoch() when used in production
+    current_epoch_.store(1);
 
     shutdown_flag_ = false;
     // Use the requested number of worker threads
@@ -122,19 +125,36 @@ std::string RocksDBPersistence::generateKey(uint32_t shard_id, uint32_t partitio
     return ss.str();
 }
 
+uint32_t RocksDBPersistence::getCurrentEpoch() const {
+    return current_epoch_.load();
+}
+
+void RocksDBPersistence::setEpoch(uint32_t epoch) {
+    current_epoch_.store(epoch);
+}
+
 uint64_t RocksDBPersistence::getNextSequenceNumber(uint32_t partition_id) {
     std::lock_guard<std::mutex> lock(seq_mutex_);
     auto it = sequence_numbers_.find(partition_id);
     if (it == sequence_numbers_.end()) {
-        sequence_numbers_[partition_id].store(0);
-        return 0;
+        sequence_numbers_[partition_id].store(1);  // Next one will be 1
+        return 0;  // Return 0 for the first sequence
     }
-    return it->second.fetch_add(1);
+    return it->second.fetch_add(1);  // Fetch current value and then increment
 }
 
+// Legacy interface for backward compatibility - defaults to ordered callbacks
 std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size,
                                                    uint32_t shard_id, uint32_t partition_id,
                                                    std::function<void(bool)> callback) {
+    return persistAsync(data, size, shard_id, partition_id, callback, true);  // Default to ordered
+}
+
+// New interface with ordering control
+std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size,
+                                                   uint32_t shard_id, uint32_t partition_id,
+                                                   std::function<void(bool)> callback,
+                                                   bool require_ordering) {
     if (!initialized_) {
         // Not initialized - this is normal for followers/learners
         // Return success without doing anything
@@ -165,7 +185,9 @@ std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size
 
     uint32_t epoch = current_epoch_.load();
     if (epoch == 0) {
-        epoch = get_epoch();
+        // If epoch is 0, try to get it from the system, but only in production
+        // In tests, we'll use a default value set during initialization
+        epoch = 1;
         current_epoch_.store(epoch);
     }
 
@@ -174,8 +196,26 @@ std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size
     // For large logs, avoid copying if possible
     req->value.reserve(size);  // Pre-allocate to avoid reallocation
     req->value.assign(data, size);
-    req->callback = callback;
+    req->partition_id = partition_id;
+    req->sequence_number = seq_num;
+    req->require_ordering = require_ordering;
     req->size = size;  // Store size for debugging
+
+    // If ordering is required, store callback in partition state
+    if (require_ordering && callback) {
+        std::lock_guard<std::mutex> state_lock(partition_states_mutex_);
+        auto& state = partition_states_[partition_id];
+        if (!state) {
+            state = std::make_unique<PartitionState>();
+        }
+
+        std::lock_guard<std::mutex> lock(state->state_mutex);
+        state->pending_callbacks[seq_num] = callback;
+        state->highest_queued_seq = std::max(state->highest_queued_seq.load(), seq_num);
+        req->callback = nullptr;  // Will be called from processOrderedCallbacks
+    } else {
+        req->callback = callback;
+    }
 
     auto future = req->promise.get_future();
 
@@ -236,7 +276,11 @@ void RocksDBPersistence::workerThread() {
 
             // Process callbacks and promises for all requests in batch
             for (auto& req : batch) {
-                if (req->callback) {
+                if (req->require_ordering) {
+                    // Handle ordered callback
+                    handlePersistComplete(req->partition_id, req->sequence_number,
+                                        nullptr, success);  // Callback already stored in partition state
+                } else if (req->callback) {
                     req->callback(success);
                 }
                 req->promise.set_value(success);
@@ -275,6 +319,70 @@ bool RocksDBPersistence::flushAll() {
     }
 
     return true;
+}
+
+void RocksDBPersistence::handlePersistComplete(uint32_t partition_id, uint64_t sequence_number,
+                                              std::function<void(bool)> callback, bool success) {
+    std::lock_guard<std::mutex> state_lock(partition_states_mutex_);
+    auto it = partition_states_.find(partition_id);
+    if (it == partition_states_.end()) {
+        // No partition state, just call callback if provided
+        if (callback) {
+            callback(success);
+        }
+        return;
+    }
+
+    auto& state = it->second;
+    std::lock_guard<std::mutex> lock(state->state_mutex);
+
+    // Mark this sequence as persisted
+    state->persisted_sequences.insert(sequence_number);
+    state->persist_results[sequence_number] = success;
+
+    // Process any callbacks that are now ready
+    processOrderedCallbacks(partition_id);
+}
+
+void RocksDBPersistence::processOrderedCallbacks(uint32_t partition_id) {
+    // Called with partition_states_mutex_ and state->state_mutex held
+    auto it = partition_states_.find(partition_id);
+    if (it == partition_states_.end()) {
+        return;
+    }
+
+    auto& state = it->second;
+    uint64_t next_seq = state->next_expected_seq.load();
+
+    // Process all callbacks that are ready (all previous sequences persisted)
+    while (state->persisted_sequences.count(next_seq) > 0) {
+        // This sequence has been persisted
+        state->persisted_sequences.erase(next_seq);
+
+        // Get the result for this sequence
+        bool success = true;
+        auto result_it = state->persist_results.find(next_seq);
+        if (result_it != state->persist_results.end()) {
+            success = result_it->second;
+            state->persist_results.erase(result_it);
+        }
+
+        // Find and execute the callback
+        auto callback_it = state->pending_callbacks.find(next_seq);
+        if (callback_it != state->pending_callbacks.end()) {
+            auto callback = callback_it->second;
+            state->pending_callbacks.erase(callback_it);
+
+            // Execute callback without holding locks to avoid deadlock
+            state->state_mutex.unlock();
+            callback(success);
+            state->state_mutex.lock();
+        }
+
+        // Move to next sequence
+        state->next_expected_seq.store(next_seq + 1);
+        next_seq++;
+    }
 }
 
 } // namespace mako

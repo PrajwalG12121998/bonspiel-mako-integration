@@ -46,13 +46,27 @@ else
     exit 1
 fi
 
+# Run ordered callbacks test
+echo ""
+echo "5. Running ordered callbacks test..."
+if ./build/test_ordered_callbacks > /tmp/ordered_callbacks_output.txt 2>&1; then
+    echo "   ✓ Ordered callbacks test passed"
+    echo ""
+    echo "Ordered callbacks output:"
+    grep -E "===|✓|✗|ERROR" /tmp/ordered_callbacks_output.txt
+else
+    echo "   ✗ Ordered callbacks test failed"
+    cat /tmp/ordered_callbacks_output.txt
+    exit 1
+fi
+
 # Verify RocksDB files were created
 echo ""
-echo "5. Verifying RocksDB persistence files..."
-if ls /tmp/test_rocksdb*/CURRENT > /dev/null 2>&1; then
+echo "6. Verifying RocksDB persistence files..."
+if ls /tmp/test_rocksdb*/CURRENT > /dev/null 2>&1 || ls /tmp/rocksdb_ordered*/CURRENT > /dev/null 2>&1; then
     echo "   ✓ RocksDB database files created successfully"
     echo "   Database locations:"
-    for dir in /tmp/test_rocksdb*; do
+    for dir in /tmp/test_rocksdb* /tmp/rocksdb_ordered*; do
         if [ -d "$dir" ]; then
             echo "     - $dir ($(du -sh $dir | cut -f1))"
         fi
@@ -67,6 +81,7 @@ echo ""
 echo "Tests executed:"
 echo "  ✓ Basic RocksDB persistence test (test_rocksdb_persistence)"
 echo "  ✓ Callback demonstration test (test_callback_demo)"
+echo "  ✓ Ordered callbacks test (test_ordered_callbacks)"
 echo ""
 echo "Integration points:"
 echo "  - Transaction.hh:143 - Persistence with atomic counters and callbacks"
@@ -77,5 +92,7 @@ echo "Callback features:"
 echo "  - Atomic counters track success/failure in main thread"
 echo "  - Progress reporting every 1000 successful writes"
 echo "  - Immediate error reporting with failure counts"
+echo "  - Ordered callback execution per partition (Paxos-like guarantees)"
+echo "  - Independent ordering across partitions (no cross-partition blocking)"
 echo ""
 echo "Key format: {shard_id}:{partition_id}:{epoch}:{sequence_number}"

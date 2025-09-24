@@ -991,7 +991,7 @@ public:
     TThread::transget_without_throw = false;
     TThread::transget_without_stable = false;
     TThread::the_debug_bit = 0;
-    if (BenchmarkConfig::getInstance().getCluster().compare("localhost")==0){
+    if (BenchmarkConfig::getInstance().getLeaderConfig()){
       TThread::is_worker_leader = true;
     }
 

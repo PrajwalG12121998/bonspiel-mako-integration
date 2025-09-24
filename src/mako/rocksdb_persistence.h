@@ -12,6 +12,8 @@
 #include <condition_variable>
 #include <future>
 #include <unordered_map>
+#include <map>
+#include <set>
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
@@ -24,6 +26,19 @@ struct PersistRequest {
     std::function<void(bool)> callback;
     std::promise<bool> promise;
     size_t size{0};  // For debugging
+    uint32_t partition_id{0};
+    uint64_t sequence_number{0};
+    bool require_ordering{false};
+};
+
+struct PartitionState {
+    std::atomic<uint64_t> next_expected_seq{0};
+    std::atomic<uint64_t> highest_queued_seq{0};
+
+    std::map<uint64_t, std::function<void(bool)>> pending_callbacks;
+    std::set<uint64_t> persisted_sequences;
+    std::map<uint64_t, bool> persist_results;  // sequence -> success/failure
+    std::mutex state_mutex;
 };
 
 class RocksDBPersistence {
@@ -37,11 +52,17 @@ public:
                                    uint32_t shard_id, uint32_t partition_id,
                                    std::function<void(bool)> callback = nullptr);
 
+    // New interface with ordering control
+    std::future<bool> persistAsync(const char* data, size_t size,
+                                   uint32_t shard_id, uint32_t partition_id,
+                                   std::function<void(bool)> callback,
+                                   bool require_ordering);
+
     std::string generateKey(uint32_t shard_id, uint32_t partition_id,
                            uint32_t epoch, uint64_t seq_num);
 
-    uint32_t getCurrentEpoch() const { return current_epoch_.load(); }
-    void setEpoch(uint32_t epoch) { current_epoch_.store(epoch); }
+    uint32_t getCurrentEpoch() const;
+    void setEpoch(uint32_t epoch);
 
     size_t getPendingWrites() const { return pending_writes_.load(); }
 
@@ -56,6 +77,9 @@ private:
 
     void workerThread();
     uint64_t getNextSequenceNumber(uint32_t partition_id);
+    void processOrderedCallbacks(uint32_t partition_id);
+    void handlePersistComplete(uint32_t partition_id, uint64_t sequence_number,
+                              std::function<void(bool)> callback, bool success);
 
     std::unique_ptr<rocksdb::DB> db_;
     rocksdb::Options options_;
@@ -73,6 +97,9 @@ private:
 
     std::mutex seq_mutex_;
     std::unordered_map<uint32_t, std::atomic<uint64_t>> sequence_numbers_;
+
+    std::unordered_map<uint32_t, std::unique_ptr<PartitionState>> partition_states_;
+    std::mutex partition_states_mutex_;
 
     bool initialized_{false};
 };
