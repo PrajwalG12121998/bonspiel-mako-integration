@@ -28,98 +28,36 @@ The codebase is primarily C++17 with multiple build systems (CMake, Makefile, WA
 ### Primary Build (CMake - Recommended for Mako)
 ```bash
 # Configure and build
-mkdir -p build && cd build
-cmake .. -DPAXOS_LIB_ENABLED=1 -DMICRO_BENCHMARK=0 -DSHARDS=3
-make -j32 dbtest  # This can take 10-30 minutes on first build!
-
-# Alternative: use convenience script
-bash compile-cmake.sh
-```
-
-### Legacy Build (Makefile - for Janus)
-```bash
-# Performance build
-MODE=perf make -j32 dbtest PAXOS_LIB_ENABLED=1 SHARDS=4
-
-# Debug build
-MODE=debug make -j32 dbtest
-```
-
-### Install Dependencies
-```bash
-bash apt_packages.sh
-```
-
-### Configure Hosts (for distributed testing)
-```bash
-bash ./src/mako/update_config.sh
+make clean
+make -j32 
 ```
 
 ## Testing Commands
 
-### Basic Tests
 ```bash
-# Run basic tests
-python3 test_run.py -m janus
+# run all experiments
+./ci/ci.sh all
 
-# Run Mako experiments
-./run_experiment.py --shards 1 --threads 6 --runtime 30 --ssh-user $USER --dry-run
+# simple transactions
+./ci/ci.sh simpleTransaction
 
-# Run specific benchmark
-./run.py -f config/sample.yml
+# simple replication
+./ci/ci.sh simplePaxos
 
-# Run all experiments
-python3 run_all.py
-```
+# two shards without replication
+./ci/ci.sh shardNoReplication
 
-### Single Shard with Paxos Replication (1 Leader + 2 Followers + 1 Learner)
-To test Paxos replication with multiple replicas on a single machine, run these commands in separate terminals:
+# 1 shard with replication on dbtest
+./ci/ci.sh shard1Replication
 
-```bash
-# Follower 1 (p1)
-nohup ./build/dbtest --verbose --bench tpcc --basedir ./tmp \
-                     --db-type mbta --num-threads 6 --scale-factor 6 --num-erpc-server 2 \
-                     --shard-index 0 --shard-config $(pwd)/src/mako/config/local-shards1-warehouses6.yml \
-                     -F config/1leader_2followers/paxos6_shardidx0.yml -F config/occ_paxos.yml \
-                     --txn-flags 1 --runtime 30 -P p1 --bench-opts \
-                     --new-order-fast-id-gen --retry-aborted-transactions --numa-memory 1G > p1.log 2>&1 &
+# 2 shards with replication on dbtest
+./ci/ci.sh shard2Replication
 
-# Follower 2 (p2)
-nohup ./build/dbtest --verbose --bench tpcc --basedir ./tmp \
-                     --db-type mbta --num-threads 6 --scale-factor 6 --num-erpc-server 2 \
-                     --shard-index 0 --shard-config $(pwd)/src/mako/config/local-shards1-warehouses6.yml \
-                     -F config/1leader_2followers/paxos6_shardidx0.yml -F config/occ_paxos.yml \
-                     --txn-flags 1 --runtime 30 -P p2 --bench-opts \
-                     --new-order-fast-id-gen --retry-aborted-transactions --numa-memory 1G > p2.log 2>&1 &
+# 1 shard with replication on simple transaction
+./ci/ci.sh shard1ReplicationSimple
 
-# Leader (localhost)
-nohup ./build/dbtest --verbose --bench tpcc --basedir ./tmp \
-                     --db-type mbta --num-threads 6 --scale-factor 6 --num-erpc-server 2 \
-                     --shard-index 0 --shard-config $(pwd)/src/mako/config/local-shards1-warehouses6.yml \
-                     -F config/1leader_2followers/paxos6_shardidx0.yml -F config/occ_paxos.yml \
-                     --txn-flags 1 --runtime 30 -P localhost --bench-opts \
-                     --new-order-fast-id-gen --retry-aborted-transactions --numa-memory 1G > leader.log 2>&1 &
-
-# Learner (learner)
-nohup ./build/dbtest --verbose --bench tpcc --basedir ./tmp \
-                     --db-type mbta --num-threads 6 --scale-factor 6 --num-erpc-server 2 \
-                     --shard-index 0 --shard-config $(pwd)/src/mako/config/local-shards1-warehouses6.yml \
-                     -F config/1leader_2followers/paxos6_shardidx0.yml -F config/occ_paxos.yml \
-                     --txn-flags 1 --runtime 30 -P learner --bench-opts \
-                     --new-order-fast-id-gen --retry-aborted-transactions --numa-memory 1G > learner.log 2>&1 &
-```
-
-Monitor logs with: `tail -f leader.log p1.log p2.log learner.log`  
-Stop all processes: `pkill -f dbtest`
-
-### Multi-site testing (single process with all sites)
-```bash
-export MAKO_MULTI_SITE=1 && ./dbtest -t 6 -s 1 -S 1 -K 3 -N leader_s0,follower1_s0,follower2_s0 -C ./multi_site_config.yml -F ./paxos_multi_site.yml -F ../config/occ_paxos.yml
-
-# Note: When debugging long-running processes, use MUCH longer timeouts as initialization can take significant time
-# Better to use 10+ minutes (600s) or no timeout at all:
-# timeout 600 ./dbtest ...  # 10 minutes minimum
-# Or just run without timeout and use Ctrl+C if needed
+# 2 shards with replication on simple transaction
+./ci/ci.sh shard2ReplicationSimple
 ```
 
 ## Code Architecture
