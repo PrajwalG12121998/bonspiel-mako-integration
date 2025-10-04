@@ -129,35 +129,49 @@ void Reactor::Loop(bool infinite) {
   verify(std::this_thread::get_id() == thread_id_);
   looping_ = infinite;
   do {
-    std::vector<shared_ptr<Event>> ready_events;
-//    auto& events = all_events_;
-    auto& events = waiting_events_;
-//    Log_debug("event list size: %d", events.size());
-    for (auto it = events.begin(); it != events.end();) {
-      Event& event = **it;
-      event.Test();
-      if (event.status_ == Event::READY) {
-        ready_events.push_back(std::move(*it));
-        it = events.erase(it);
-      } else if (event.status_ == Event::DONE) {
-        it = events.erase(it);
-      } else {
-        it ++;
+    // Keep processing events until no new ready events are found
+    // This fixes the event chain propagation issue
+    bool found_ready_events = true;
+    while (found_ready_events) {
+      found_ready_events = false;
+      std::vector<shared_ptr<Event>> ready_events;
+      
+      // Check waiting events
+      auto& events = waiting_events_;
+      for (auto it = events.begin(); it != events.end();) {
+        Event& event = **it;
+        event.Test();
+        if (event.status_ == Event::READY) {
+          ready_events.push_back(std::move(*it));
+          it = events.erase(it);
+          found_ready_events = true;
+        } else if (event.status_ == Event::DONE) {
+          it = events.erase(it);
+        } else {
+          it ++;
+        }
       }
-    }
-    CheckTimeout(ready_events);
-
-    for (auto& up_ev: ready_events) {
-      auto& event = *up_ev;
-      auto sp_coro = event.wp_coro_.lock();
-      verify(sp_coro);
-      verify(coros_.find(sp_coro) != coros_.end());
-      if (event.status_ == Event::READY) {
-        event.status_ = Event::DONE;
-      } else {
-        verify(event.status_ == Event::TIMEOUT);
+      
+      CheckTimeout(ready_events);
+      
+      // Process ready events
+      for (auto& up_ev: ready_events) {
+        auto& event = *up_ev;
+        auto sp_coro = event.wp_coro_.lock();
+        verify(sp_coro);
+        verify(coros_.find(sp_coro) != coros_.end());
+        if (event.status_ == Event::READY) {
+          event.status_ = Event::DONE;
+        } else {
+          verify(event.status_ == Event::TIMEOUT);
+        }
+        ContinueCoro(sp_coro);
       }
-      ContinueCoro(sp_coro);
+      
+      // If we're not in infinite mode and found no events, stop inner loop
+      if (!infinite && !found_ready_events) {
+        break;
+      }
     }
   } while (looping_);
 }

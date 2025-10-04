@@ -128,8 +128,42 @@ class OrEvent : public Event {
     AddEvent(args...);
   }
 
-  bool IsReady() {
+  bool IsReady() override {
     return std::any_of(events_.begin(), events_.end(), [](shared_ptr<Event> e){return e->IsReady();});
+  }
+};
+
+class AndEvent : public Event {
+ public:
+  vector<shared_ptr<Event>> events_;
+
+  // Default constructor
+  AndEvent() {}
+  
+  // Constructor for vector of events
+  explicit AndEvent(const vector<shared_ptr<Event>>& evs) : events_(evs) {}
+
+  void AddEvent() {
+    // empty func for recursive variadic parameters
+  }
+
+  template<typename... Args>
+  void AddEvent(shared_ptr<Event> x, Args... rest) {
+    events_.push_back(x);
+    AddEvent(rest...);
+  }
+
+  template<typename... Args>
+  AndEvent(shared_ptr<Event> first, Args... rest) {
+    AddEvent(first, rest...);
+  }
+
+  bool IsReady() override {
+    // All events must be ready (or DONE) for AndEvent to be ready
+    return std::all_of(events_.begin(), events_.end(), 
+                       [](shared_ptr<Event> e) {
+                         return e && (e->IsReady() || e->status_ == Event::DONE);
+                       });
   }
 };
 

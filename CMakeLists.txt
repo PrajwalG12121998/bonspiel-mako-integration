@@ -905,10 +905,38 @@ if(BUILD_TESTS)
         add_test(NAME test_coroutine COMMAND test_coroutine)
     endif()
     
+    # Extended RPC Tests
+    add_executable(test_rpc_extended test/test_rpc_extended.cc test/benchmark_service.cc)
+    target_include_directories(test_rpc_extended PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(test_rpc_extended PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(test_rpc_extended ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+    add_test(NAME test_rpc_extended COMMAND test_rpc_extended)
+    
+    # Extended Reactor Tests
+    add_executable(test_reactor_extended test/test_reactor_extended.cc)
+    target_include_directories(test_reactor_extended PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(test_reactor_extended PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(test_reactor_extended ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+    add_test(NAME test_reactor_extended COMMAND test_reactor_extended)
+    
+    # Timeout Race Condition Tests
+    add_executable(test_timeout_race test/test_timeout_race.cc)
+    target_include_directories(test_timeout_race PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(test_timeout_race PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(test_timeout_race ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+    add_test(NAME test_timeout_race COMMAND test_timeout_race)
+    
+    # AndEvent Tests
+    add_executable(test_and_event test/test_and_event.cc)
+    target_include_directories(test_and_event PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(test_and_event PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(test_and_event ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+    add_test(NAME test_and_event COMMAND test_and_event)
+    
     # Add a convenience target to run all tests
     add_custom_target(run_tests
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        DEPENDS test_marshal test_rpc test_future test_reactor  # test_alock removed due to crashes
+        DEPENDS test_marshal test_rpc test_future test_reactor test_rpc_extended test_reactor_extended  # test_alock removed due to crashes
         COMMENT "Running all RRR tests"
     )
     
@@ -932,9 +960,11 @@ if(BUILD_TESTS)
     message(STATUS "Test targets configured:")
     message(STATUS "  - test_marshal: Marshal/Unmarshal tests")
     message(STATUS "  - test_rpc: RPC client/server tests")
+    message(STATUS "  - test_rpc_extended: Extended RPC tests (timeouts, reconnection, load)")
     # message(STATUS "  - test_alock: Atomic lock tests")  # Commented out due to crashes
     message(STATUS "  - test_future: Future/async operation tests")
     message(STATUS "  - test_reactor: Reactor/event system tests")
+    message(STATUS "  - test_reactor_extended: Extended reactor tests (events, coroutines, load)")
     message(STATUS "")
     message(STATUS "Run tests with: make run_tests")
     message(STATUS "Or individually: make test && ctest")
