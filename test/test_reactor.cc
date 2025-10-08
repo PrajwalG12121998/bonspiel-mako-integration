@@ -23,10 +23,8 @@ private:
     std::function<void()> write_handler_;
     std::function<void()> error_handler_;
 
-protected:
-    ~TestPollable() override = default;
-
 public:
+    ~TestPollable() override = default;
     explicit TestPollable(int fd, int mode = READ) 
         : fd_(fd), mode_(mode) {}
 
@@ -104,67 +102,64 @@ TEST_F(ReactorTest, BasicPollMgrCreation) {
 
 TEST_F(ReactorTest, AddRemoveFd) {
     auto [fd1, fd2] = create_socket_pair();
-    
-    TestPollable* p = new TestPollable(fd1);
-    
+
+    auto p = std::make_shared<TestPollable>(fd1);
+
     poll_mgr->add(p);
-    
+
     poll_mgr->remove(p);
-    
-    p->release();  // Use release() for RefCounted
+
     close(fd1);
     close(fd2);
 }
 
 TEST_F(ReactorTest, PollReadEvent) {
     auto [fd1, fd2] = create_socket_pair();
-    
+
     std::atomic<bool> read_triggered{false};
-    
-    TestPollable* p = new TestPollable(fd1, Pollable::READ);
+
+    auto p = std::make_shared<TestPollable>(fd1, Pollable::READ);
     p->set_read_handler([&read_triggered, fd1]() {
         read_triggered = true;
         // Read data to clear the event
         char buf[256];
         read(fd1, buf, sizeof(buf));
     });
-    
+
     poll_mgr->add(p);
-    
+
     // Write data to trigger read event
     const char* test_data = "test";
     write(fd2, test_data, strlen(test_data));
-    
+
     // Give poll thread time to process
     std::this_thread::sleep_for(milliseconds(100));
-    
+
     EXPECT_TRUE(read_triggered);
-    
+
     poll_mgr->remove(p);
-    p->release();
     close(fd1);
     close(fd2);
 }
 
 TEST_F(ReactorTest, PollWriteEvent) {
     auto [fd1, fd2] = create_socket_pair();
-    
+
     std::atomic<bool> write_triggered{false};
-    
-    TestPollable* p = new TestPollable(fd1, Pollable::WRITE);
+
+    auto p = std::make_shared<TestPollable>(fd1, Pollable::WRITE);
     p->set_write_handler([&write_triggered]() {
         write_triggered = true;
     });
-    
+
     poll_mgr->add(p);
-    
+
     // Socket should be immediately writable
     std::this_thread::sleep_for(milliseconds(100));
-    
+
     EXPECT_TRUE(write_triggered);
-    
+
     poll_mgr->remove(p);
-    p->release();
     close(fd1);
     close(fd2);
 }
@@ -172,39 +167,37 @@ TEST_F(ReactorTest, PollWriteEvent) {
 TEST_F(ReactorTest, MultipleEvents) {
     auto [fd1, fd2] = create_socket_pair();
     auto [fd3, fd4] = create_socket_pair();
-    
+
     std::atomic<int> events_triggered{0};
-    
-    TestPollable* p1 = new TestPollable(fd1, Pollable::READ);
+
+    auto p1 = std::make_shared<TestPollable>(fd1, Pollable::READ);
     p1->set_read_handler([&events_triggered, fd1]() {
         events_triggered++;
         char buf[256];
         read(fd1, buf, sizeof(buf));
     });
-    
-    TestPollable* p2 = new TestPollable(fd3, Pollable::READ);
+
+    auto p2 = std::make_shared<TestPollable>(fd3, Pollable::READ);
     p2->set_read_handler([&events_triggered, fd3]() {
         events_triggered++;
         char buf[256];
         read(fd3, buf, sizeof(buf));
     });
-    
+
     poll_mgr->add(p1);
     poll_mgr->add(p2);
-    
+
     // Trigger both events
     write(fd2, "test1", 5);
     write(fd4, "test2", 5);
-    
+
     std::this_thread::sleep_for(milliseconds(200));
-    
+
     EXPECT_EQ(events_triggered, 2);
-    
+
     poll_mgr->remove(p1);
     poll_mgr->remove(p2);
-    p1->release();
-    p2->release();
-    
+
     close(fd1);
     close(fd2);
     close(fd3);
@@ -213,11 +206,11 @@ TEST_F(ReactorTest, MultipleEvents) {
 
 TEST_F(ReactorTest, UpdateMode) {
     auto [fd1, fd2] = create_socket_pair();
-    
+
     std::atomic<bool> read_triggered{false};
     std::atomic<bool> write_triggered{false};
-    
-    TestPollable* p = new TestPollable(fd1, Pollable::READ);
+
+    auto p = std::make_shared<TestPollable>(fd1, Pollable::READ);
     p->set_read_handler([&read_triggered, fd1]() {
         read_triggered = true;
         char buf[256];
@@ -226,50 +219,48 @@ TEST_F(ReactorTest, UpdateMode) {
     p->set_write_handler([&write_triggered]() {
         write_triggered = true;
     });
-    
+
     poll_mgr->add(p);
-    
+
     // Initially only READ mode
     write(fd2, "test", 4);
     std::this_thread::sleep_for(milliseconds(100));
     EXPECT_TRUE(read_triggered);
     EXPECT_FALSE(write_triggered);
-    
+
     // Change to WRITE mode
     p->set_mode(Pollable::WRITE);
     poll_mgr->update_mode(p, Pollable::WRITE);
-    
+
     std::this_thread::sleep_for(milliseconds(100));
     EXPECT_TRUE(write_triggered);
-    
+
     poll_mgr->remove(p);
-    p->release();
     close(fd1);
     close(fd2);
 }
 
 TEST_F(ReactorTest, ErrorHandling) {
     auto [fd1, fd2] = create_socket_pair();
-    
+
     std::atomic<bool> error_triggered{false};
-    
-    TestPollable* p = new TestPollable(fd1, Pollable::READ);
+
+    auto p = std::make_shared<TestPollable>(fd1, Pollable::READ);
     p->set_error_handler([&error_triggered]() {
         error_triggered = true;
     });
-    
+
     poll_mgr->add(p);
-    
+
     // Close the other end to trigger error/hangup
     close(fd2);
-    
+
     std::this_thread::sleep_for(milliseconds(200));
-    
+
     // Error handling depends on epoll/kqueue behavior
     // This test may not reliably trigger error on all systems
-    
+
     poll_mgr->remove(p);
-    p->release();
     close(fd1);
 }
 
@@ -368,25 +359,25 @@ TEST_F(ReactorTest, StressTest) {
     const int num_fds = 10;
     const int events_per_fd = 10;
     std::vector<std::pair<int, int>> socket_pairs;
-    std::vector<TestPollable*> pollables;
+    std::vector<std::shared_ptr<TestPollable>> pollables;
     std::atomic<int> total_events{0};
-    
+
     // Create multiple socket pairs
     for (int i = 0; i < num_fds; i++) {
         socket_pairs.push_back(create_socket_pair());
         auto [fd1, fd2] = socket_pairs.back();
-        
-        TestPollable* p = new TestPollable(fd1, Pollable::READ);
+
+        auto p = std::make_shared<TestPollable>(fd1, Pollable::READ);
         p->set_read_handler([&total_events, fd1]() {
             total_events++;
             char buf[256];
             read(fd1, buf, sizeof(buf));
         });
-        
+
         poll_mgr->add(p);
         pollables.push_back(p);
     }
-    
+
     // Send multiple events
     for (int i = 0; i < events_per_fd; i++) {
         for (auto& [fd1, fd2] : socket_pairs) {
@@ -394,18 +385,17 @@ TEST_F(ReactorTest, StressTest) {
         }
         std::this_thread::sleep_for(milliseconds(10));
     }
-    
+
     // Wait for processing
     std::this_thread::sleep_for(milliseconds(500));
-    
+
     EXPECT_EQ(total_events, num_fds * events_per_fd);
-    
+
     // Cleanup
     for (auto p : pollables) {
         poll_mgr->remove(p);
-        p->release();
     }
-    
+
     for (auto& [fd1, fd2] : socket_pairs) {
         close(fd1);
         close(fd2);

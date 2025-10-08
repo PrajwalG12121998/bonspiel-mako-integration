@@ -35,56 +35,56 @@ public:
     }
     
 private:
-    void fast_echo_wrapper(Request* req, ServerConnection* sconn) {
+    void fast_echo_wrapper(Request* req, std::shared_ptr<ServerConnection> sconn) {
         call_count++;
         std::string input;
         req->m >> input;
-        
+
         sconn->begin_reply(req);
         *sconn << input;
         sconn->end_reply();
-        
+
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    
-    void slow_echo_wrapper(Request* req, ServerConnection* sconn) {
+
+    void slow_echo_wrapper(Request* req, std::shared_ptr<ServerConnection> sconn) {
         call_count++;
         std::string input;
         req->m >> input;
-        
+
         if (should_delay) {
             std::this_thread::sleep_for(milliseconds(delay_ms));
         }
-        
+
         sconn->begin_reply(req);
         *sconn << input;
         sconn->end_reply();
-        
+
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    
-    void get_value_wrapper(Request* req, ServerConnection* sconn) {
+
+    void get_value_wrapper(Request* req, std::shared_ptr<ServerConnection> sconn) {
         call_count++;
         i32 input;
         req->m >> input;
-        
+
         i32 result = input * 2;
-        
+
         sconn->begin_reply(req);
         *sconn << result;
         sconn->end_reply();
-        
+
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    
-    void error_method_wrapper(Request* req, ServerConnection* sconn) {
+
+    void error_method_wrapper(Request* req, std::shared_ptr<ServerConnection> sconn) {
         call_count++;
         // Don't reply - simulate an error
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
 };
 
@@ -93,30 +93,32 @@ protected:
     PollMgr* poll_mgr;
     Server* server;
     TestFutureService* service;
-    Client* client;
+    std::shared_ptr<Client> client;
     static constexpr int test_port = 8849;  // Different port from RPC test
-    
+
     void SetUp() override {
         poll_mgr = new PollMgr;
         server = new Server(poll_mgr);
         service = new TestFutureService();
-        
+
         server->reg(service);
-        
+
         ASSERT_EQ(server->start(("0.0.0.0:" + std::to_string(test_port)).c_str()), 0);
-        
-        client = new Client(poll_mgr);
+
+        client = std::make_shared<Client>(poll_mgr);
         ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(test_port)).c_str()), 0);
-        
+
         std::this_thread::sleep_for(milliseconds(50));
     }
-    
+
     void TearDown() override {
-        client->close_and_release();
-        
+        client->close();
+
         delete service;
-        delete server;
-        
+        delete server;  // Server destructor waits for connections to close
+
+        // shared_ptr handles cleanup automatically
+
         poll_mgr->release();
     }
 };

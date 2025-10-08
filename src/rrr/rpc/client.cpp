@@ -106,7 +106,12 @@ void Client::invalidate_pending_futures() {
 // SAFETY: Idempotent, proper cleanup sequence
 void Client::close() {
   if (status_ == CONNECTED) {
-    pollmgr_->remove(this);
+    try {
+      auto self = shared_from_this();
+      pollmgr_->remove(self);
+    } catch (const std::bad_weak_ptr&) {
+      // Object is being destroyed, shared_ptr no longer exists
+    }
     ::close(sock_);
   }
   status_ = CLOSED;
@@ -184,7 +189,7 @@ int Client::connect(const char* addr) {
   Log_debug("rrr::Client: connected to %s", addr);
 
   status_ = CONNECTED;
-  pollmgr_->add(this);
+  pollmgr_->add(shared_from_this());
 
   return 0;
 }
@@ -205,7 +210,11 @@ void Client::handle_write() {
   out_.write_to_fd(sock_);
   if (out_.empty()) {
     //Log_info("Client handle_write setting read mode here...");
-    pollmgr_->update_mode(this, Pollable::READ);
+    try {
+      pollmgr_->update_mode(shared_from_this(), Pollable::READ);
+    } catch (const std::bad_weak_ptr&) {
+      // Object is being destroyed, skip mode update
+    }
   }
   out_l_.unlock();
 }
@@ -328,7 +337,11 @@ void Client::end_request() {
   // always enable write events since the code above gauranteed there
   // will be some data to send
   //Log_info("Client end_request setting write mode here....");
-  pollmgr_->update_mode(this, Pollable::READ | Pollable::WRITE);
+  try {
+    pollmgr_->update_mode(shared_from_this(), Pollable::READ | Pollable::WRITE);
+  } catch (const std::bad_weak_ptr&) {
+    // Object is being destroyed, skip mode update
+  }
 
   out_l_.unlock();
 }
@@ -351,47 +364,41 @@ ClientPool::ClientPool(PollMgr* pollmgr /* =? */,
 // SAFETY: Closes all clients and releases PollMgr
 ClientPool::~ClientPool() {
   for (auto& it : cache_) {
-    for (int i = 0; i < parallel_connections_; i++) {
-      it.second[i]->close_and_release();
+    for (auto& client : it.second) {
+      client->close();
     }
-    delete[] it.second;
   }
+  // shared_ptr handles cleanup automatically
   pollmgr_->release();
 }
 
 // @unsafe - Gets cached or creates new client connections
 // SAFETY: Protected by spinlock, handles connection failures gracefully
-Client* ClientPool::get_client(const string& addr) {
-  Client* cl = nullptr;
+std::shared_ptr<Client> ClientPool::get_client(const string& addr) {
+  std::shared_ptr<Client> sp_cl = nullptr;
   l_.lock();
-  map<string, Client**>::iterator it = cache_.find(addr);
+  auto it = cache_.find(addr);
   if (it != cache_.end()) {
-    cl = it->second[rand_() % parallel_connections_];
+    sp_cl = it->second[rand_() % parallel_connections_];
   } else {
-    Client** parallel_clients = new Client* [parallel_connections_];
-    int i;
+    std::vector<std::shared_ptr<Client>> parallel_clients;
     bool ok = true;
-    for (i = 0; i < parallel_connections_; i++) {
-      parallel_clients[i] = new Client(this->pollmgr_);
-      if (parallel_clients[i]->connect(addr.c_str()) != 0) {
+    for (int i = 0; i < parallel_connections_; i++) {
+      auto client = std::make_shared<Client>(this->pollmgr_);
+      if (client->connect(addr.c_str()) != 0) {
         ok = false;
         break;
       }
+      parallel_clients.push_back(client);
     }
     if (ok) {
-      cl = parallel_clients[rand_() % parallel_connections_];
-      insert_into_map(cache_, addr, parallel_clients);
-    } else {
-      // close connections
-      while (i >= 0) {
-        parallel_clients[i]->close_and_release();
-        i--;
-      }
-      delete[] parallel_clients;
+      sp_cl = parallel_clients[rand_() % parallel_connections_];
+      cache_[addr] = std::move(parallel_clients);
     }
+    // If not ok, parallel_clients automatically cleaned up by shared_ptr
   }
   l_.unlock();
-  return cl;
+  return sp_cl;
 }
 
 } // namespace rrr

@@ -207,14 +207,14 @@ class PollMgr::PollThread {
 
   Epoll poll_{};
 
-  // guard mode_ and poll_set_
   SpinLock l_;
+  // Authoritative storage: fd -> shared_ptr<Pollable>
+  std::unordered_map<int, std::shared_ptr<Pollable>> fd_to_pollable_;
   std::unordered_map<int, int> mode_; // fd->mode
-  std::unordered_set<Pollable*> poll_set_;
 
   std::set<std::shared_ptr<Job>> set_sp_jobs_;
 
-  std::unordered_set<Pollable*> pending_remove_;
+  std::unordered_set<int> pending_remove_;  // Store fds to remove
   SpinLock pending_remove_l_;
   SpinLock lock_job_;
 
@@ -268,18 +268,16 @@ class PollMgr::PollThread {
     stop_flag_ = true;
     Pthread_join(th_, nullptr);
 
-    // when stopping, release anything registered in pollmgr
-    for (auto& it: poll_set_) {
-      this->remove(it);
+    // when stopping, remove anything registered in pollmgr
+    for (auto& pair : fd_to_pollable_) {
+      this->remove(pair.second);
     }
-    for (auto& it: pending_remove_) {
-      it->release();
-    }
+    // shared_ptrs automatically cleaned up
   }
 
-  void add(Pollable*);
-  void remove(Pollable*);
-  void update_mode(Pollable*, int new_mode);
+  void add(std::shared_ptr<Pollable> poll);
+  void remove(std::shared_ptr<Pollable> poll);
+  void update_mode(std::shared_ptr<Pollable> poll, int new_mode);
 
   void add(std::shared_ptr<Job>);
   void remove(std::shared_ptr<Job>);
@@ -314,30 +312,52 @@ PollMgr::~PollMgr() {
 void PollMgr::PollThread::poll_loop() {
   while (!stop_flag_) {
     TriggerJob();
-    poll_.Wait();
+    // Pass lookup lambda: userdata is Pollable*, lookup shared_ptr by fd
+    poll_.Wait([this](void* userdata) -> std::shared_ptr<Pollable> {
+        Pollable* poll_ptr = reinterpret_cast<Pollable*>(userdata);
+        int fd = poll_ptr->fd();  // Safe - object still in map
+
+        l_.lock();
+        auto it = fd_to_pollable_.find(fd);
+        std::shared_ptr<Pollable> result;
+        if (it != fd_to_pollable_.end()) {
+          result = it->second;
+        }
+        l_.unlock();
+
+        return result;
+    });
     TriggerJob();
-    //poll_.Wait();
-    // after each poll loop, remove uninterested pollables
+
+    // Process deferred removals AFTER all events handled
     pending_remove_l_.lock();
-    std::list<Pollable*> remove_poll(pending_remove_.begin(), pending_remove_.end());
+    std::unordered_set<int> remove_fds = std::move(pending_remove_);
     pending_remove_.clear();
     pending_remove_l_.unlock();
 
-    for (auto& poll: remove_poll) {
-      int fd = poll->fd();
-
+    for (int fd : remove_fds) {
       l_.lock();
-      if (mode_.find(fd) == mode_.end()) {
-        // NOTE: only remove the fd when it is not immediately added again
-        // if the same fd is used again, mode_ will contains its info
-        poll_.Remove(poll);
-      }
-      l_.unlock();
 
-      poll->release();
+      auto it = fd_to_pollable_.find(fd);
+      if (it == fd_to_pollable_.end()) {
+        l_.unlock();
+        continue;
+      }
+
+      auto sp_poll = it->second;
+
+      // Check if fd was reused
+      if (mode_.find(fd) == mode_.end()) {
+        poll_.Remove(sp_poll);
+      }
+
+      // Remove from map - object may be destroyed here
+      fd_to_pollable_.erase(it);
+      mode_.erase(fd);
+
+      l_.unlock();
     }
     TriggerJob();
-    //poll_.Wait();
     Reactor::GetReactor()->Loop();
   }
 }
@@ -356,70 +376,70 @@ void PollMgr::PollThread::remove(std::shared_ptr<Job> sp_job) {
   lock_job_.unlock();
 }
 
-// @unsafe - Adds pollable with raw pointer and ref counting
-// SAFETY: Proper reference counting ensures object lifetime
-void PollMgr::PollThread::add(Pollable* poll) {
-  poll->ref_copy();   // increase ref count
-
-  int poll_mode = poll->poll_mode();
-  int fd = poll->fd();
+// @safe - Adds pollable with shared_ptr ownership
+// SAFETY: Stores shared_ptr in map, passes raw pointer to epoll
+void PollMgr::PollThread::add(std::shared_ptr<Pollable> sp_poll) {
+  int fd = sp_poll->fd();
+  int poll_mode = sp_poll->poll_mode();
 
   l_.lock();
 
-  // verify not exists
-  verify(poll_set_.find(poll) == poll_set_.end());
-  verify(mode_.find(fd) == mode_.end());
+  // Check if already exists
+  if (fd_to_pollable_.find(fd) != fd_to_pollable_.end()) {
+    l_.unlock();
+    return;
+  }
 
-  // register pollable
-  poll_set_.insert(poll);
+  // Store in map
+  fd_to_pollable_[fd] = sp_poll;
   mode_[fd] = poll_mode;
-  poll_.Add(poll);
+
+  // userdata = raw Pollable* for lookup
+  void* userdata = sp_poll.get();
+
+  poll_.Add(sp_poll, userdata);
 
   l_.unlock();
 }
 
 // @unsafe - Removes pollable with deferred cleanup
 // SAFETY: Deferred removal ensures safe cleanup
-void PollMgr::PollThread::remove(Pollable* poll) {
-  bool found = false;
+void PollMgr::PollThread::remove(std::shared_ptr<Pollable> sp_poll) {
+  int fd = sp_poll->fd();
+
   l_.lock();
-  std::unordered_set<Pollable*>::iterator it = poll_set_.find(poll);
-  if (it != poll_set_.end()) {
-    found = true;
-    assert(mode_.find(poll->fd()) != mode_.end());
-    poll_set_.erase(poll);
-    mode_.erase(poll->fd());
-  } else {
-    assert(mode_.find(poll->fd()) == mode_.end());
+  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
+    l_.unlock();
+    return;  // Not found
   }
   l_.unlock();
 
-  if (found) {
-    pending_remove_l_.lock();
-    pending_remove_.insert(poll);
-    pending_remove_l_.unlock();
-  }
+  // Add to pending_remove (actual removal happens after epoll_wait)
+  pending_remove_l_.lock();
+  pending_remove_.insert(fd);
+  pending_remove_l_.unlock();
 }
 
-// @unsafe - Updates poll mode with raw pointer access
+// @unsafe - Updates poll mode
 // SAFETY: Protected by spinlock, validates poll existence
-void PollMgr::PollThread::update_mode(Pollable* poll, int new_mode) {
-  int fd = poll->fd();
+void PollMgr::PollThread::update_mode(std::shared_ptr<Pollable> sp_poll, int new_mode) {
+  int fd = sp_poll->fd();
 
   l_.lock();
 
-  if (poll_set_.find(poll) == poll_set_.end()) {
+  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
     l_.unlock();
     return;
   }
 
-  auto it = mode_.find(fd);
-  verify(it != mode_.end());
-  int old_mode = it->second;
-  it->second = new_mode;
+  auto mode_it = mode_.find(fd);
+  verify(mode_it != mode_.end());
+  int old_mode = mode_it->second;
+  mode_it->second = new_mode;
 
   if (new_mode != old_mode) {
-    poll_.Update(poll, new_mode, old_mode);
+    void* userdata = sp_poll.get();  // Raw pointer
+    poll_.Update(sp_poll, userdata, new_mode, old_mode);
   }
 
   l_.unlock();
@@ -436,9 +456,9 @@ static inline uint32_t hash_fd(uint32_t key) {
   return key;
 }
 
-// @unsafe - Routes pollable to thread based on fd hash
+// @safe - Routes pollable to thread based on fd hash
 // SAFETY: Hash ensures consistent thread assignment
-void PollMgr::add(Pollable* poll) {
+void PollMgr::add(std::shared_ptr<Pollable> poll) {
   int fd = poll->fd();
   if (fd >= 0) {
     int tid = hash_fd(fd) % n_threads_;
@@ -446,9 +466,9 @@ void PollMgr::add(Pollable* poll) {
   }
 }
 
-// @unsafe - Routes removal to correct thread
+// @safe - Routes removal to correct thread
 // SAFETY: Uses same hash as add() for consistency
-void PollMgr::remove(Pollable* poll) {
+void PollMgr::remove(std::shared_ptr<Pollable> poll) {
   int fd = poll->fd();
   if (fd >= 0) {
     int tid = hash_fd(fd) % n_threads_;
@@ -456,9 +476,9 @@ void PollMgr::remove(Pollable* poll) {
   }
 }
 
-// @unsafe - Routes mode update to correct thread
+// @safe - Routes mode update to correct thread
 // SAFETY: Uses same hash as add() for consistency
-void PollMgr::update_mode(Pollable* poll, int new_mode) {
+void PollMgr::update_mode(std::shared_ptr<Pollable> poll, int new_mode) {
   int fd = poll->fd();
   if (fd >= 0) {
     int tid = hash_fd(fd) % n_threads_;

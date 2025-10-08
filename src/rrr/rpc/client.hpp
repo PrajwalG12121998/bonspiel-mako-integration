@@ -137,7 +137,7 @@ public:
 
 // @unsafe - RPC client with socket management and marshaling
 // SAFETY: Proper socket lifecycle and thread-safe pending futures
-class Client: public Pollable {
+class Client: public Pollable, public std::enable_shared_from_this<Client> {
     Marshal in_, out_;
 
     /**
@@ -158,16 +158,11 @@ class Client: public Pollable {
     SpinLock pending_fu_l_;
     SpinLock out_l_;
 
-    // reentrant, could be called multiple times before releasing
-    // @unsafe - Closes socket and cleans up
-    // SAFETY: Idempotent, properly invalidates futures
-    void close();
-
     // @unsafe - Cancels all pending futures
     // SAFETY: Protected by spinlock
     void invalidate_pending_futures();
 
-protected:
+public:
 
     // @unsafe - Cleanup destructor
     // SAFETY: Ensures all futures are invalidated
@@ -175,9 +170,15 @@ protected:
         invalidate_pending_futures();
     }
 
-public:
 
     Client(PollMgr* pollmgr): pollmgr_(pollmgr), sock_(-1), status_(NEW), bmark_(nullptr) { }
+
+    // Factory method to create Client with shared_ptr and add to pollmgr
+    static std::shared_ptr<Client> create(PollMgr* pollmgr) {
+        auto client = std::make_shared<Client>(pollmgr);
+        // Note: Client is added to pollmgr when connect() is called
+        return client;
+    }
 
     /**
      * Start a new request. Must be paired with end_request(), even if nullptr returned.
@@ -212,10 +213,10 @@ public:
     // SAFETY: Proper socket creation and cleanup on failure
     int connect(const char* addr);
 
-    void close_and_release() {
-        close();
-        release();
-    }
+    // reentrant, could be called multiple times
+    // @unsafe - Closes socket and cleans up
+    // SAFETY: Idempotent, properly invalidates futures
+    void close();
 
     int fd() {
         return sock_;
@@ -243,7 +244,7 @@ class ClientPool: public NoCopy {
 
     // guard cache_
     SpinLock l_;
-    std::map<std::string, rrr::Client**> cache_;
+    std::map<std::string, std::vector<std::shared_ptr<Client>>> cache_;
     int parallel_connections_;
 
 public:
@@ -259,7 +260,7 @@ public:
     // on error, return nullptr
     // @unsafe - Gets or creates client connection
     // SAFETY: Protected by spinlock, handles connection failures
-    rrr::Client* get_client(const std::string& addr);
+    std::shared_ptr<rrr::Client> get_client(const std::string& addr);
 
 };
 

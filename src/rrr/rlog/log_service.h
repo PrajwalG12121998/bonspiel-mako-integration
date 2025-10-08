@@ -1,7 +1,6 @@
 #pragma once
 
-#include "rpc/server.h"
-#include "rpc/client.h"
+#include "rrr.hpp"
 
 #include <errno.h>
 
@@ -11,8 +10,8 @@ namespace rlog {
 class RLogService: public rrr::Service {
 public:
     enum {
-        LOG = 0x4585f576,
-        AGGREGATE_QPS = 0x206797fa,
+        LOG = 0x3c8d559f,
+        AGGREGATE_QPS = 0x46a873bf,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -29,41 +28,35 @@ public:
         return ret;
     }
     // these RPC handler functions need to be implemented by user
-    // for 'raw' handlers, remember to reply req, delete req, and sconn->release(); use sconn->run_async for heavy job
+    // for 'raw' handlers, remember to reply req, delete req; shared_ptr handles connection lifetime
     virtual void log(const rrr::i32& level, const std::string& source, const rrr::i64& msg_id, const std::string& message) = 0;
     virtual void aggregate_qps(const std::string& metric_name, const rrr::i32& increment) = 0;
 private:
-    void __log__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
-        auto f = [=] {
-            rrr::i32 in_0;
-            req->m >> in_0;
-            std::string in_1;
-            req->m >> in_1;
-            rrr::i64 in_2;
-            req->m >> in_2;
-            std::string in_3;
-            req->m >> in_3;
-            this->log(in_0, in_1, in_2, in_3);
-            sconn->begin_reply(req);
-            sconn->end_reply();
-            delete req;
-            sconn->release();
-        };
-        sconn->run_async(f);
+    void __log__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
+        rrr::i32 in_0;
+        req->m >> in_0;
+        std::string in_1;
+        req->m >> in_1;
+        rrr::i64 in_2;
+        req->m >> in_2;
+        std::string in_3;
+        req->m >> in_3;
+        this->log(in_0, in_1, in_2, in_3);
+        sconn->begin_reply(req);
+        sconn->end_reply();
+        delete req;
+        // sconn automatically released by shared_ptr
     }
-    void __aggregate_qps__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
-        auto f = [=] {
-            std::string in_0;
-            req->m >> in_0;
-            rrr::i32 in_1;
-            req->m >> in_1;
-            this->aggregate_qps(in_0, in_1);
-            sconn->begin_reply(req);
-            sconn->end_reply();
-            delete req;
-            sconn->release();
-        };
-        sconn->run_async(f);
+    void __aggregate_qps__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
+        std::string in_0;
+        req->m >> in_0;
+        rrr::i32 in_1;
+        req->m >> in_1;
+        this->aggregate_qps(in_0, in_1);
+        sconn->begin_reply(req);
+        sconn->end_reply();
+        delete req;
+        // sconn automatically released by shared_ptr
     }
 };
 

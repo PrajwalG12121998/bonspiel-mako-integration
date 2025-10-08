@@ -63,30 +63,32 @@ protected:
     PollMgr* poll_mgr;
     Server* server;
     TestService* service;
-    Client* client;
+    std::shared_ptr<Client> client;
     static constexpr int test_port = 8848;
-    
+
     void SetUp() override {
         poll_mgr = new PollMgr;
         server = new Server(poll_mgr);
         service = new TestService();
-        
+
         server->reg(service);
-        
+
         ASSERT_EQ(server->start(("0.0.0.0:" + std::to_string(test_port)).c_str()), 0);
-        
-        client = new Client(poll_mgr);
+
+        client = std::make_shared<Client>(poll_mgr);
         ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(test_port)).c_str()), 0);
-        
+
         std::this_thread::sleep_for(milliseconds(100));
     }
-    
+
     void TearDown() override {
-        client->close_and_release();
-        
+        client->close();
+
         delete service;
-        delete server;
-        
+        delete server;  // Server destructor waits for connections to close
+
+        // shared_ptr handles cleanup automatically
+
         poll_mgr->release();
     }
 };
@@ -274,25 +276,26 @@ TEST_F(RPCTest, ConnectionResilience) {
     *client << input1;
     client->end_request();
     fu1->wait();
-    
+
     EXPECT_EQ(fu1->get_error_code(), 0);
     fu1->release();
-    
-    client->close_and_release();
-    
+
+    client->close();
+    client.reset();  // Release the shared_ptr
+
     std::this_thread::sleep_for(milliseconds(100));
-    
-    client = new Client(poll_mgr);
+
+    client = std::make_shared<Client>(poll_mgr);
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(test_port)).c_str()), 0);
-    
+
     std::this_thread::sleep_for(milliseconds(100));
-    
+
     std::string input2 = "after_reconnect";
     Future* fu2 = client->begin_request(benchmark::BenchmarkService::FAST_NOP);
     *client << input2;
     client->end_request();
     fu2->wait();
-    
+
     EXPECT_EQ(fu2->get_error_code(), 0);
     fu2->release();
 }
@@ -384,33 +387,36 @@ protected:
 };
 
 TEST_F(ConnectionErrorTest, ConnectToNonExistentServer) {
-    Client* client = new Client(poll_mgr);
-    
+    auto client = std::make_shared<Client>(poll_mgr);
+
     int result = client->connect("127.0.0.1:9999");
-    
+
     EXPECT_NE(result, 0);
-    
-    client->close_and_release();
+
+    client->close();
+    // shared_ptr handles cleanup automatically
 }
 
 TEST_F(ConnectionErrorTest, InvalidAddress) {
-    Client* client = new Client(poll_mgr);
-    
+    auto client = std::make_shared<Client>(poll_mgr);
+
     int result = client->connect("invalid_address:1234");
-    
+
     EXPECT_NE(result, 0);
-    
-    client->close_and_release();
+
+    client->close();
+    // shared_ptr handles cleanup automatically
 }
 
 TEST_F(ConnectionErrorTest, InvalidPort) {
-    Client* client = new Client(poll_mgr);
-    
+    auto client = std::make_shared<Client>(poll_mgr);
+
     int result = client->connect("127.0.0.1:99999");
-    
+
     EXPECT_NE(result, 0);
-    
-    client->close_and_release();
+
+    client->close();
+    // shared_ptr handles cleanup automatically
 }
 
 int main(int argc, char** argv) {

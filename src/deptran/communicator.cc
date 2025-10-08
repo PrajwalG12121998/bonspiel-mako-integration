@@ -78,8 +78,9 @@ void Communicator::WaitConnectClientLeaders() {
 Communicator::~Communicator() {
   verify(rpc_clients_.size() > 0);
   for (auto& pair : rpc_clients_) {
-    rrr::Client* rpc_cli = pair.second;
-    rpc_cli->close_and_release();
+    auto& rpc_cli = pair.second;
+    rpc_cli->close();
+    // shared_ptr handles cleanup automatically
   }
   rpc_clients_.clear();
 }
@@ -132,14 +133,14 @@ Communicator::ConnectToClientSite(Config::SiteInfo& site,
   snprintf(addr, sizeof(addr), "%s:%d", site.host.c_str(), site.port);
 
   auto start = std::chrono::steady_clock::now();
-  rrr::Client* rpc_cli = new rrr::Client(rpc_poll_);
+  auto rpc_cli = std::make_shared<rrr::Client>(rpc_poll_);
   double elapsed;
   int attempt = 0;
   do {
     Log_info("connect to client site: %s (attempt %d)", addr, attempt++);
     auto connect_result = rpc_cli->connect(addr);
     if (connect_result == SUCCESS) {
-      ClientControlProxy* rpc_proxy = new ClientControlProxy(rpc_cli);
+      ClientControlProxy* rpc_proxy = new ClientControlProxy(rpc_cli.get());
       rpc_clients_.insert(std::make_pair(site.id, rpc_cli));
       Log_debug("connect to client site: %s success!", addr);
       return std::make_pair(SUCCESS, rpc_proxy);
@@ -151,7 +152,8 @@ Communicator::ConnectToClientSite(Config::SiteInfo& site,
         .count();
   } while (elapsed < timeout.count());
   Log_info("timeout connecting to client %s", addr);
-  rpc_cli->close_and_release();
+  rpc_cli->close();
+  // shared_ptr handles cleanup automatically
   return std::make_pair(FAILURE, nullptr);
 }
 
@@ -160,14 +162,14 @@ Communicator::ConnectToSite(Config::SiteInfo& site,
                             std::chrono::milliseconds timeout) {
   string addr = site.GetHostAddr();
   auto start = std::chrono::steady_clock::now();
-  rrr::Client* rpc_cli = new rrr::Client(rpc_poll_);
+  auto rpc_cli = std::make_shared<rrr::Client>(rpc_poll_);
   double elapsed;
   int attempt = 0;
   do {
     Log_info("connect to site: %s (attempt %d)", addr.c_str(), attempt++);
     auto connect_result = rpc_cli->connect(addr.c_str());
     if (connect_result == SUCCESS) {
-      ClassicProxy* rpc_proxy = new ClassicProxy(rpc_cli);
+      ClassicProxy* rpc_proxy = new ClassicProxy(rpc_cli.get());
       rpc_clients_.insert(std::make_pair(site.id, rpc_cli));
       rpc_proxies_.insert(std::make_pair(site.id, rpc_proxy));
       Log_debug("connect to site: %s success!", addr.c_str());
@@ -180,7 +182,8 @@ Communicator::ConnectToSite(Config::SiteInfo& site,
         .count();
   } while (elapsed < timeout.count());
   Log_info("timeout connecting to %s", addr.c_str());
-  rpc_cli->close_and_release();
+  rpc_cli->close();
+  // shared_ptr handles cleanup automatically
   return std::make_pair(FAILURE, nullptr);
 }
 

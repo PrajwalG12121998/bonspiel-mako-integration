@@ -727,7 +727,7 @@ void* heartbeatMonitor(void* arg){
 
 void* heartbeatBackground(void* arg) {
   rrr::PollMgr *pm = new rrr::PollMgr(1);
-  rrr::Client* rpc_cli = new rrr::Client(pm);
+  auto rpc_cli = std::make_shared<rrr::Client>(pm);
   auto site_leader = Config::GetConfig()->LeaderSiteByPartitionId(0);
   // get the leader's host + port
   auto port = site_leader.port + PaxosWorker::CtrlPortDelta;
@@ -737,7 +737,7 @@ void* heartbeatBackground(void* arg) {
      usleep(100 * 1000); // retry to connect
   }
 
-  ServerControlProxy *client_proxy = new ServerControlProxy(rpc_cli);
+  ServerControlProxy *client_proxy = new ServerControlProxy(rpc_cli.get());
   while (es->running) {
     size_t connected = client_proxy->server_heart_beat();
     if (connected==0){
@@ -752,7 +752,7 @@ void* heartbeatBackground(void* arg) {
 // between distant datacenters
 void* heartbeatBackground2(void* arg) {
   rrr::PollMgr *pm = new rrr::PollMgr(1);
-  rrr::Client* rpc_cli = new rrr::Client(pm);
+  auto rpc_cli = std::make_shared<rrr::Client>(pm);
   auto site_leader = Config::GetConfig()->LeaderSiteByPartitionId(0); // tie to the partition0
   // get the leader's host + port
   auto port = site_leader.port + PaxosWorker::CtrlPortDelta;
@@ -762,7 +762,7 @@ void* heartbeatBackground2(void* arg) {
      usleep(100 * 1000); // retry to connect
   }
 
-  ServerControlProxy *client_proxy = new ServerControlProxy(rpc_cli);
+  ServerControlProxy *client_proxy = new ServerControlProxy(rpc_cli.get());
   while (es->running) {
     size_t connected = client_proxy->server_heart_beat();
     if (connected==0){

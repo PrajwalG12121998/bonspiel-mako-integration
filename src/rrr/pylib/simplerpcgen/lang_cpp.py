@@ -51,14 +51,14 @@ def emit_service_and_proxy(service, f, rpc_table):
             f.writeln("return ret;")
         f.writeln("}")
         f.writeln("// these RPC handler functions need to be implemented by user")
-        f.writeln("// for 'raw' handlers, remember to reply req, delete req, and sconn->release(); use sconn->run_async for heavy job")
+        f.writeln("// for 'raw' handlers, remember to reply req, delete req; shared_ptr handles connection lifetime")
         for func in service.functions:
             if service.abstract or func.abstract:
                 postfix = " = 0"
             else:
                 postfix = ""
             if func.attr == "raw":
-                f.writeln("virtual void %s(rrr::Request* req, rrr::ServerConnection* sconn)%s;" % (func.name, postfix))
+                f.writeln("virtual void %s(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn)%s;" % (func.name, postfix))
             else:
                 func_args = []
                 for in_arg in func.input:
@@ -79,7 +79,7 @@ def emit_service_and_proxy(service, f, rpc_table):
         for func in service.functions:
             if func.attr == "raw":
                 continue
-            f.writeln("void __%s__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {" % func.name)
+            f.writeln("void __%s__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {" % func.name)
             with f.indent():
                 if func.attr == "defer":
                     invoke_with = []
@@ -135,7 +135,7 @@ def emit_service_and_proxy(service, f, rpc_table):
                         f.writeln("*sconn << out_%d;" % i)
                     f.writeln("sconn->end_reply();")
                     f.writeln("delete req;")
-                    f.writeln("sconn->release();")
+                    f.writeln("// sconn automatically released by shared_ptr")
             f.writeln("}")
     f.writeln("};")
     f.writeln()

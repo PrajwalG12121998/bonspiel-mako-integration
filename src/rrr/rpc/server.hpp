@@ -131,7 +131,7 @@ class ServerListener: public Pollable {
 };
 
 // @unsafe - Handles individual client connections
-// SAFETY: Thread-safe with spinlocks, proper refcounting
+// SAFETY: Thread-safe with spinlocks, proper shared_ptr lifetime management
 class ServerConnection: public Pollable {
 
     friend class Server;
@@ -150,6 +150,8 @@ class ServerConnection: public Pollable {
         CONNECTED, CLOSED
     } status_;
 
+    // get_shared() is now inherited from Pollable base class
+
     /**
      * Only to be called by:
      * 1: ~Server(), which is called when destroying Server
@@ -163,13 +165,12 @@ class ServerConnection: public Pollable {
     static std::unordered_set<i32> rpc_id_missing_s;
     static SpinLock rpc_id_missing_l_s;
 
-protected:
+public:
 
-    // Protected destructor as required by RefCounted.
+    // Public destructor for shared_ptr compatibility
     // @safe - Simple destructor updating counter
     ~ServerConnection();
 
-public:
 
     // @unsafe - Initializes connection with socket
     // SAFETY: Increments server connection counter
@@ -230,24 +231,23 @@ public:
 // @safe - RAII wrapper for deferred RPC replies
 class DeferredReply: public NoCopy {
     rrr::Request* req_;
-    rrr::ServerConnection* sconn_;
+    std::shared_ptr<rrr::ServerConnection> sconn_;
     std::function<void()> marshal_reply_;
     std::function<void()> cleanup_;
 
 public:
 
-    DeferredReply(rrr::Request* req, rrr::ServerConnection* sconn,
+    DeferredReply(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn,
                   const std::function<void()>& marshal_reply, const std::function<void()>& cleanup)
         : req_(req), sconn_(sconn), marshal_reply_(marshal_reply), cleanup_(cleanup) {}
 
-    // @unsafe - Cleanup destructor
+    // @safe - Cleanup destructor with automatic shared_ptr release
     // SAFETY: Proper cleanup order and null checks
     ~DeferredReply() {
         cleanup_();
         delete req_;
-        sconn_->release();
         req_ = nullptr;
-        sconn_ = nullptr;
+        // sconn_ automatically released by shared_ptr
     }
 
     int run_async(const std::function<void()>& f) {
@@ -271,7 +271,7 @@ public:
 class Server: public NoCopy {
     friend class ServerConnection;
  public:
-    std::unordered_map<i32, std::function<void(Request*, ServerConnection*)>> handlers_;
+    std::unordered_map<i32, std::function<void(Request*, std::shared_ptr<ServerConnection>)>> handlers_;
     PollMgr* pollmgr_;
     ThreadPool* threadpool_;
     int server_sock_;
@@ -279,8 +279,8 @@ class Server: public NoCopy {
     Counter sconns_ctr_;
 
     SpinLock sconns_l_;
-    std::unordered_set<ServerConnection*> sconns_{};
-    std::unique_ptr<ServerListener> up_server_listener_{};
+    std::unordered_set<std::shared_ptr<ServerConnection>> sconns_{};
+    std::shared_ptr<ServerListener> sp_server_listener_{};
 
     enum {
         NEW, RUNNING, STOPPING, STOPPED
@@ -324,21 +324,21 @@ public:
      *
      *     // cleanup resource
      *     delete request;
-     *     server_connection->release();
+     *     // No need to release, shared_ptr handles it
      *  }
      */
     // @safe - Registers RPC handler function
-    int reg(i32 rpc_id, const std::function<void(Request*, ServerConnection*)>& func);
+    int reg(i32 rpc_id, const std::function<void(Request*, std::shared_ptr<ServerConnection>)>& func);
 
     template<class S>
-    int reg(i32 rpc_id, S* svc, void (S::*svc_func)(Request*, ServerConnection*)) {
+    int reg(i32 rpc_id, S* svc, void (S::*svc_func)(Request*, std::shared_ptr<ServerConnection>)) {
 
         // disallow duplicate rpc_id
         if (handlers_.find(rpc_id) != handlers_.end()) {
             return EEXIST;
         }
 
-        handlers_[rpc_id] = [svc, svc_func] (Request* req, ServerConnection* sconn) {
+        handlers_[rpc_id] = [svc, svc_func] (Request* req, std::shared_ptr<ServerConnection> sconn) {
             (svc->*svc_func)(req, sconn);
         };
 

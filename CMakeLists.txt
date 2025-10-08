@@ -934,11 +934,26 @@ if(BUILD_TESTS)
     target_compile_options(test_and_event PRIVATE ${TEST_COMPILE_OPTIONS})
     target_link_libraries(test_and_event ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
     add_test(NAME test_and_event COMMAND test_and_event)
-    
+
+    # Integration tests from CI
+    add_test(NAME simpleTransaction COMMAND simpleTransaction)
+
+    # simplePaxos requires config generation and running a shell script that launches multiple processes
+    add_test(NAME simplePaxos
+        COMMAND bash -c "bash ./src/mako/update_config.sh && bash ./examples/simplePaxos.sh"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    # shard1ReplicationSimple tests 1-shard replication using simpleTransactionRep
+    add_test(NAME shard1ReplicationSimple
+        COMMAND bash -c "bash ./examples/test_1shard_replication_simple.sh"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
     # Add a convenience target to run all tests
     add_custom_target(run_tests
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        DEPENDS test_marshal test_rpc test_future test_reactor test_rpc_extended test_reactor_extended  # test_alock removed due to crashes
+        DEPENDS test_marshal test_rpc test_future test_reactor test_rpc_extended test_reactor_extended simpleTransaction simplePaxos shard1ReplicationSimple  # test_alock removed
         COMMENT "Running all RRR tests"
     )
     

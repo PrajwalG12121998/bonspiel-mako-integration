@@ -32,16 +32,16 @@ inline rrr::Marshal& operator >>(rrr::Marshal& m, point3& o) {
 class BenchmarkService: public rrr::Service {
 public:
     enum {
-        FAST_PRIME = 0x1aed00ec,
-        FAST_DOT_PROD = 0x1734e70c,
-        FAST_ADD = 0x2f8af552,
-        FAST_NOP = 0x2c2581ba,
-        FAST_VEC = 0x2fd964b6,
-        PRIME = 0x6cbeb76f,
-        DOT_PROD = 0x5d1fa03f,
-        ADD = 0x6fe7f871,
-        NOP = 0x5aa56913,
-        SLEEP = 0x28aab39f,
+        FAST_PRIME = 0x1bee6787,
+        FAST_DOT_PROD = 0x601fb371,
+        FAST_ADD = 0x1fd59346,
+        FAST_NOP = 0x5bf4392f,
+        FAST_VEC = 0x6d9e2181,
+        PRIME = 0x57b84304,
+        DOT_PROD = 0x2f0bc784,
+        ADD = 0x5c654f6f,
+        NOP = 0x174191bc,
+        SLEEP = 0x615a1d82,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -90,7 +90,7 @@ public:
         return ret;
     }
     // these RPC handler functions need to be implemented by user
-    // for 'raw' handlers, remember to reply req, delete req, and sconn->release(); use sconn->run_async for heavy job
+    // for 'raw' handlers, remember to reply req, delete req; shared_ptr handles connection lifetime
     virtual void fast_prime(const rrr::i32& n, rrr::i8* flag);
     virtual void fast_dot_prod(const point3& p1, const point3& p2, double* v);
     virtual void fast_add(const rrr::v32& a, const rrr::v32& b, rrr::v32* a_add_b);
@@ -102,7 +102,7 @@ public:
     virtual void nop(const std::string&);
     virtual void sleep(const double& sec);
 private:
-    void __fast_prime__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __fast_prime__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         rrr::i32 in_0;
         req->m >> in_0;
         rrr::i8 out_0;
@@ -111,9 +111,9 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __fast_dot_prod__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __fast_dot_prod__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         point3 in_0;
         req->m >> in_0;
         point3 in_1;
@@ -124,9 +124,9 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __fast_add__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __fast_add__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         rrr::v32 in_0;
         req->m >> in_0;
         rrr::v32 in_1;
@@ -137,18 +137,18 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __fast_nop__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __fast_nop__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::string in_0;
         req->m >> in_0;
         this->fast_nop(in_0);
         sconn->begin_reply(req);
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __fast_vec__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __fast_vec__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         rrr::i32 in_0;
         req->m >> in_0;
         std::vector<rrr::i64> out_0;
@@ -157,9 +157,9 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __prime__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __prime__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         rrr::i32 in_0;
         req->m >> in_0;
         rrr::i8 out_0;
@@ -168,9 +168,9 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __dot_prod__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __dot_prod__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         point3 in_0;
         req->m >> in_0;
         point3 in_1;
@@ -181,9 +181,9 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __add__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __add__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         rrr::v32 in_0;
         req->m >> in_0;
         rrr::v32 in_1;
@@ -194,25 +194,25 @@ private:
         *sconn << out_0;
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __nop__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __nop__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::string in_0;
         req->m >> in_0;
         this->nop(in_0);
         sconn->begin_reply(req);
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
-    void __sleep__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __sleep__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         double in_0;
         req->m >> in_0;
         this->sleep(in_0);
         sconn->begin_reply(req);
         sconn->end_reply();
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     }
 };
 

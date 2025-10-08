@@ -118,11 +118,11 @@ public:
     pthread_t* GetPthreads(int);
 
     // @safe - Thread-safe addition of pollable object
-    void add(Pollable*);
-    // @safe - Thread-safe removal of pollable object  
-    void remove(Pollable*);
+    void add(std::shared_ptr<Pollable> poll);
+    // @safe - Thread-safe removal of pollable object
+    void remove(std::shared_ptr<Pollable> poll);
     // @safe - Thread-safe mode update
-    void update_mode(Pollable*, int new_mode);
+    void update_mode(std::shared_ptr<Pollable> poll, int new_mode);
     
     // Frequent Job
     // @safe - Thread-safe job management

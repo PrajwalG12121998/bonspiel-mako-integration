@@ -109,7 +109,7 @@ static void* client_proc(void*) {
         sleep(1);
     }
 
-    cl->close_and_release();
+    cl->close();  // shared_ptr handles cleanup
     pthread_exit(nullptr);
     return nullptr;
 }

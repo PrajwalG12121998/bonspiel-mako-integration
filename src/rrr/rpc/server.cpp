@@ -102,6 +102,8 @@ ServerConnection::~ServerConnection() {
     server_->sconns_ctr_.next(-1);
 }
 
+// get_shared() is now inherited from Pollable base class
+
 // @safe - Delegates to thread pool
 int ServerConnection::run_async(const std::function<void()>& f) {
   // run_async should not be used - process RPC synchronously
@@ -136,7 +138,20 @@ void ServerConnection::end_reply() {
 
     // always enable write events since the code above gauranteed there
     // will be some data to send
-    server_->pollmgr_->update_mode(this, Pollable::READ | Pollable::WRITE);
+    // Find our shared_ptr in server's connection set
+    server_->sconns_l_.lock();
+    std::shared_ptr<ServerConnection> sconn;
+    for (auto& sp : server_->sconns_) {
+        if (sp.get() == this) {
+            sconn = sp;
+            break;
+        }
+    }
+    server_->sconns_l_.unlock();
+
+    if (sconn) {
+        server_->pollmgr_->update_mode(sconn, Pollable::READ | Pollable::WRITE);
+    }
 
     out_l_.unlock();
 }
@@ -222,11 +237,24 @@ void ServerConnection::handle_read() {
 
         auto it = server_->handlers_.find(rpc_id);
         if (it != server_->handlers_.end()) {
-            // the handler should delete req, and release server_connection refcopy.
-            Coroutine::CreateRun([&it, &req, this] () {
-            it->second(req, (ServerConnection *) this->ref_copy());
-            block_read_in.reset();
-            });
+            // the handler should delete req, shared_ptr keeps connection alive.
+            // Find our shared_ptr in server's connection set
+            server_->sconns_l_.lock();
+            std::shared_ptr<ServerConnection> sconn;
+            for (auto& sp : server_->sconns_) {
+                if (sp.get() == this) {
+                    sconn = sp;
+                    break;
+                }
+            }
+            server_->sconns_l_.unlock();
+
+            if (sconn) {
+                Coroutine::CreateRun([it, req, sconn] () {
+                    it->second(req, sconn);
+                    sconn->block_read_in.reset();
+                });
+            }
         } else {
             rpc_id_missing_l_s.lock();
             bool surpress_warning = false;
@@ -256,7 +284,20 @@ void ServerConnection::handle_write() {
     out_l_.lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
-        server_->pollmgr_->update_mode(this, Pollable::READ);
+        // Find our shared_ptr in server's connection set
+        server_->sconns_l_.lock();
+        std::shared_ptr<ServerConnection> sconn;
+        for (auto& sp : server_->sconns_) {
+            if (sp.get() == this) {
+                sconn = sp;
+                break;
+            }
+        }
+        server_->sconns_l_.unlock();
+
+        if (sconn) {
+            server_->pollmgr_->update_mode(sconn, Pollable::READ);
+        }
     }
     out_l_.unlock();
 }
@@ -269,32 +310,26 @@ void ServerConnection::handle_error() {
 // @unsafe - Closes connection with proper cleanup
 // SAFETY: Thread-safe with server connection lock, idempotent
 void ServerConnection::close() {
-    bool should_release = false;
-
     if (status_ == CONNECTED) {
         server_->sconns_l_.lock();
-        unordered_set<ServerConnection*>::iterator it = server_->sconns_.find(this);
-        if (it == server_->sconns_.end()) {
-            // another thread has already calling close()
-            server_->sconns_l_.unlock();
-            return;
+
+        // Find our shared_ptr in server's connection set
+        std::shared_ptr<ServerConnection> self;
+        for (auto it = server_->sconns_.begin(); it != server_->sconns_.end(); ++it) {
+            if (it->get() == this) {
+                self = *it;
+                server_->sconns_.erase(it);
+                break;
+            }
         }
-        server_->sconns_.erase(it);
-
-        // because we released this connection from server_->sconns_
-        should_release = true;
-
-        server_->pollmgr_->remove(this);
         server_->sconns_l_.unlock();
 
-        status_ = CLOSED;
-        ::close(socket_);
-    }
-
-    // this call might actually DELETE this object, so we put it at the end of function
-    if (should_release) {
-        int ret = this->release();
-        Log_debug("server@%s close ServerConnection at fd=%d, ref=%d", server_->addr_.c_str(), socket_, ret);
+        if (self) {
+            server_->pollmgr_->remove(self);
+            status_ = CLOSED;
+            ::close(socket_);
+            Log_debug("server@%s close ServerConnection at fd=%d", server_->addr_.c_str(), socket_);
+        }
     }
 }
 
@@ -342,17 +377,32 @@ Server::~Server() {
     }
 
     sconns_l_.lock();
-    vector<ServerConnection*> sconns(sconns_.begin(), sconns_.end());
+    vector<std::shared_ptr<ServerConnection>> sconns;
+    sconns.reserve(sconns_.size());
+    for (auto& sconn : sconns_) {
+        sconns.push_back(sconn);  // Copy shared_ptr from set
+    }
     // NOTE: do NOT clear sconns_ here, because when running the following
-    // it->close(), the ServerConnection object will check the sconns_ to
+    // sp_conn->close(), the ServerConnection object will check the sconns_ to
     // ensure it still resides in sconns_
     sconns_l_.unlock();
 
     for (auto& it: sconns) {
         it->close();
+        pollmgr_->remove(it);
     }
-    up_server_listener_->close();
 
+    if (sp_server_listener_) {
+        sp_server_listener_->close();
+        pollmgr_->remove(sp_server_listener_);
+        sp_server_listener_.reset();
+    }
+
+    // Now clear sconns_ and the local copy to release shared_ptrs
+    sconns_l_.lock();
+    sconns_.clear();
+    sconns_l_.unlock();
+    sconns.clear();  // Release local shared_ptrs
 
     // make sure all open connections are closed
     int alive_connection_count = -1;
@@ -431,10 +481,10 @@ void Server::server_loop(struct addrinfo* svr_addr) {
             setsockopt(clnt_socket, SOL_SOCKET, SO_RCVBUF, &buf_len, sizeof(buf_len));
             setsockopt(clnt_socket, SOL_SOCKET, SO_SNDBUF, &buf_len, sizeof(buf_len));
             sconns_l_.lock();
-            ServerConnection* sconn = new ServerConnection(this, clnt_socket);
-            sconns_.insert(sconn);
-            pollmgr_->add(sconn);
+            auto sconn = std::make_shared<ServerConnection>(this, clnt_socket);
+            sconns_.insert(sconn);  // Insert shared_ptr into set
             sconns_l_.unlock();
+            pollmgr_->add(sconn);
         }
     }
 
@@ -463,11 +513,11 @@ void ServerListener::handle_read() {
       Log_debug("server@%s got new client, fd=%d", this->addr_.c_str(), clnt_socket);
       verify(set_nonblocking(clnt_socket, true) == 0);
 
-      ServerConnection* sconn = new ServerConnection(server_, clnt_socket);
+      auto sconn = std::make_shared<ServerConnection>(server_, clnt_socket);
       server_->sconns_l_.lock();
-      server_->sconns_.insert(sconn);
-      server_->pollmgr_->add(sconn);
+      server_->sconns_.insert(sconn);  // Insert shared_ptr into set
       server_->sconns_l_.unlock();
+      server_->pollmgr_->add(sconn);
     } else {
       break;
     }
@@ -568,8 +618,8 @@ ServerListener::ServerListener(Server* server, string addr) {
 // SAFETY: Creates listener with proper socket setup
 int Server::start(const char* bind_addr) {
   string addr(bind_addr,strlen(bind_addr));
-  up_server_listener_ = std::make_unique<ServerListener>(this, addr);
-  pollmgr_->add(up_server_listener_.get());
+  sp_server_listener_ = std::make_shared<ServerListener>(this, addr);
+  pollmgr_->add(sp_server_listener_);
   return 0;
 
   addr_ = addr;
@@ -655,7 +705,7 @@ int Server::start(const char* bind_addr) {
 }
 
 // @safe - Registers RPC handler
-int Server::reg(i32 rpc_id, const std::function<void(Request*, ServerConnection*)>& func) {
+int Server::reg(i32 rpc_id, const std::function<void(Request*, std::shared_ptr<ServerConnection>)>& func) {
     // disallow duplicate rpc_id
     if (handlers_.find(rpc_id) != handlers_.end()) {
         return EEXIST;

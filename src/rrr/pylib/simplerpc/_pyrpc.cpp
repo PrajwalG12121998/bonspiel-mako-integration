@@ -85,7 +85,7 @@ static PyObject* _pyrpc_server_reg(PyObject* self, PyObject* args) {
     // This reference count will be decreased when shutting down server
     Py_XINCREF(func);
 
-    int ret = svr->reg(rpc_id, [func](Request* req, ServerConnection* sconn) {
+    int ret = svr->reg(rpc_id, [func](Request* req, std::shared_ptr<ServerConnection> sconn) {
         Marshal* output_m = NULL;
         int error_code = 0;
         {
@@ -119,7 +119,7 @@ static PyObject* _pyrpc_server_reg(PyObject* self, PyObject* args) {
 
         // cleanup as required by simple-rpc
         delete req;
-        sconn->release();
+        // sconn automatically released by shared_ptr
     });
 
     return Py_BuildValue("i", ret);
@@ -147,7 +147,8 @@ static PyObject* _pyrpc_fini_client(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "k", &u))
         return NULL;
     Client* clnt = (Client*) u;
-    clnt->close_and_release();
+    clnt->close();  // shared_ptr handles cleanup
+    delete clnt;    // Python owns the Client object
     Py_RETURN_NONE;
 }
 

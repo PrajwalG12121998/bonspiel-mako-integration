@@ -10,7 +10,7 @@ namespace helloworld_client {
 class HelloworldClientService: public rrr::Service {
 public:
     enum {
-        TXN_READ = 0x2e6830d2,
+        TXN_READ = 0x4f605568,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -23,10 +23,10 @@ public:
         return ret;
     }
     // these RPC handler functions need to be implemented by user
-    // for 'raw' handlers, remember to reply req, delete req, and sconn->release(); use sconn->run_async for heavy job
+    // for 'raw' handlers, remember to reply req, delete req; shared_ptr handles connection lifetime
     virtual void txn_read(const std::vector<rrr::i64>& _req, rrr::i32* val, rrr::DeferredReply* defer) = 0;
 private:
-    void __txn_read__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_read__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<rrr::i64>* in_0 = new std::vector<rrr::i64>;
         req->m >> *in_0;
         rrr::i32* out_0 = new rrr::i32;

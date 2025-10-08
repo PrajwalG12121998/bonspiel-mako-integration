@@ -10,13 +10,13 @@ namespace network_client {
 class NetworkClientService: public rrr::Service {
 public:
     enum {
-        TXN_RMW = 0x448bbff4,
-        TXN_READ = 0x3fc91b8a,
-        TXN_NEW_ORDER = 0x53a42839,
-        TXN_PAYMENT = 0x628fc628,
-        TXN_DELIVERY = 0x3bbd3d23,
-        TXN_ORDER_STATUS = 0x3477fa83,
-        TXN_STOCK_LEVEL = 0x536edfc2,
+        TXN_RMW = 0x4dfdfcb6,
+        TXN_READ = 0x1730b76d,
+        TXN_NEW_ORDER = 0x41374910,
+        TXN_PAYMENT = 0x258f2f91,
+        TXN_DELIVERY = 0x29ef762f,
+        TXN_ORDER_STATUS = 0x68fdd0bc,
+        TXN_STOCK_LEVEL = 0x297adf69,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -53,7 +53,7 @@ public:
         return ret;
     }
     // these RPC handler functions need to be implemented by user
-    // for 'raw' handlers, remember to reply req, delete req, and sconn->release(); use sconn->run_async for heavy job
+    // for 'raw' handlers, remember to reply req, delete req; shared_ptr handles connection lifetime
     virtual void txn_rmw(const std::vector<rrr::i64>& _req, rrr::DeferredReply* defer) = 0;
     virtual void txn_read(const std::vector<rrr::i64>& _req, rrr::DeferredReply* defer) = 0;
     virtual void txn_new_order(const std::vector<int32_t>& _req, rrr::DeferredReply* defer) = 0;
@@ -62,7 +62,7 @@ public:
     virtual void txn_order_status(const std::vector<int32_t>& _req, rrr::DeferredReply* defer) = 0;
     virtual void txn_stock_level(const std::vector<int32_t>& _req, rrr::DeferredReply* defer) = 0;
 private:
-    void __txn_rmw__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_rmw__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<rrr::i64>* in_0 = new std::vector<rrr::i64>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -73,7 +73,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_rmw(*in_0, __defer__);
     }
-    void __txn_read__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_read__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<rrr::i64>* in_0 = new std::vector<rrr::i64>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -84,7 +84,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_read(*in_0, __defer__);
     }
-    void __txn_new_order__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_new_order__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<int32_t>* in_0 = new std::vector<int32_t>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -95,7 +95,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_new_order(*in_0, __defer__);
     }
-    void __txn_payment__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_payment__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<int32_t>* in_0 = new std::vector<int32_t>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -106,7 +106,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_payment(*in_0, __defer__);
     }
-    void __txn_delivery__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_delivery__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<int32_t>* in_0 = new std::vector<int32_t>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -117,7 +117,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_delivery(*in_0, __defer__);
     }
-    void __txn_order_status__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_order_status__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<int32_t>* in_0 = new std::vector<int32_t>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {
@@ -128,7 +128,7 @@ private:
         rrr::DeferredReply* __defer__ = new rrr::DeferredReply(req, sconn, __marshal_reply__, __cleanup__);
         this->txn_order_status(*in_0, __defer__);
     }
-    void __txn_stock_level__wrapper__(rrr::Request* req, rrr::ServerConnection* sconn) {
+    void __txn_stock_level__wrapper__(rrr::Request* req, std::shared_ptr<rrr::ServerConnection> sconn) {
         std::vector<int32_t>* in_0 = new std::vector<int32_t>;
         req->m >> *in_0;
         auto __marshal_reply__ = [=] {

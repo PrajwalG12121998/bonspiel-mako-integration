@@ -21,13 +21,9 @@
 namespace rrr {
 
 // @safe - Abstract interface for pollable file descriptors
-class Pollable: public rrr::RefCounted {
-protected:
-
-    // RefCounted class requires protected destructor
-    virtual ~Pollable() {}
-
+class Pollable {
 public:
+    virtual ~Pollable() {}
 
     enum {
         READ = 0x1, WRITE = 0x2
@@ -64,7 +60,8 @@ class Epoll {
 
   // @unsafe - Adds file descriptor to epoll/kqueue
   // SAFETY: Uses system calls with proper error checking
-  int Add(Pollable* poll) {
+  // userdata is raw Pollable* for lookup
+  int Add(std::shared_ptr<Pollable> poll, void* userdata) {
     auto poll_mode = poll->poll_mode();
     auto fd = poll->fd();
 #ifdef USE_KQUEUE
@@ -74,7 +71,7 @@ class Epoll {
       ev.ident = fd;
       ev.flags = EV_ADD;
       ev.filter = EVFILT_READ;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
     }
     if (poll_mode & Pollable::WRITE) {
@@ -82,7 +79,7 @@ class Epoll {
       ev.ident = fd;
       ev.flags = EV_ADD;
       ev.filter = EVFILT_WRITE;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
     }
 
@@ -90,7 +87,7 @@ class Epoll {
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
 
-    ev.data.ptr = poll;
+    ev.data.ptr = userdata;  // Store slot index instead of raw pointer
     ev.events = EPOLLET | EPOLLIN | EPOLLRDHUP; // EPOLLERR and EPOLLHUP are included by default
 
     if (poll_mode & Pollable::WRITE) {
@@ -103,7 +100,7 @@ class Epoll {
 
   // @unsafe - Removes file descriptor from epoll/kqueue
   // SAFETY: Uses system calls, ignores errors for already removed fds
-  int Remove(Pollable* poll) {
+  int Remove(std::shared_ptr<Pollable> poll) {
     auto fd = poll->fd();
 #ifdef USE_KQUEUE
     struct kevent ev;
@@ -129,7 +126,8 @@ class Epoll {
 
   // @unsafe - Updates poll mode for file descriptor
   // SAFETY: Uses system calls with proper event flag handling
-  int Update(Pollable* poll, int new_mode, int old_mode) {
+  // userdata is raw Pollable* for lookup
+  int Update(std::shared_ptr<Pollable> poll, void* userdata, int new_mode, int old_mode) {
     auto fd = poll->fd();
 #ifdef USE_KQUEUE
     struct kevent ev;
@@ -137,7 +135,7 @@ class Epoll {
       // add READ
       bzero(&ev, sizeof(ev));
       ev.ident = fd;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       ev.flags = EV_ADD;
       ev.filter = EVFILT_READ;
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
@@ -146,7 +144,7 @@ class Epoll {
       // del READ
       bzero(&ev, sizeof(ev));
       ev.ident = fd;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       ev.flags = EV_DELETE;
       ev.filter = EVFILT_READ;
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
@@ -155,7 +153,7 @@ class Epoll {
       // add WRITE
       bzero(&ev, sizeof(ev));
       ev.ident = fd;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       ev.flags = EV_ADD;
       ev.filter = EVFILT_WRITE;
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
@@ -164,7 +162,7 @@ class Epoll {
       // del WRITE
       bzero(&ev, sizeof(ev));
       ev.ident = fd;
-      ev.udata = poll;
+      ev.udata = userdata;  // Store slot index instead of raw pointer
       ev.flags = EV_DELETE;
       ev.filter = EVFILT_WRITE;
       verify(kevent(poll_fd_, &ev, 1, nullptr, 0, nullptr) == 0);
@@ -173,7 +171,7 @@ class Epoll {
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
 
-    ev.data.ptr = poll;
+    ev.data.ptr = userdata;  // Store slot index instead of raw pointer
     ev.events = EPOLLET | EPOLLRDHUP;
     if (new_mode & Pollable::READ) {
         ev.events |= EPOLLIN;
@@ -186,9 +184,11 @@ class Epoll {
     return 0;
   }
 
-  // @unsafe - Waits for events and dispatches to handlers
-  // SAFETY: Uses system calls with timeout, calls virtual handlers
-  void Wait() {
+  // @unsafe - Waits for events and dispatches to handlers via callback
+  // SAFETY: Uses system calls with timeout, callback receives safe shared_ptrs
+  // lookup_fn: Converts Pollable* (void*) to shared_ptr<Pollable> via fd lookup
+  template<typename LookupFn>
+  void Wait(LookupFn&& lookup_fn) {
     const int max_nev = 100;
 #ifdef USE_KQUEUE
     struct kevent evlist[max_nev];
@@ -199,8 +199,9 @@ class Epoll {
     int nev = kevent(poll_fd_, nullptr, 0, evlist, max_nev, &timeout);
 
     for (int i = 0; i < nev; i++) {
-      Pollable* poll = (Pollable*) evlist[i].udata;
-      verify(poll != nullptr);
+      void* userdata = evlist[i].udata;
+      auto poll = lookup_fn(userdata);  // Get shared_ptr via lookup
+      if (!poll) continue;
 
       if (evlist[i].filter == EVFILT_READ) {
         poll->handle_read();
@@ -225,14 +226,16 @@ class Epoll {
     //Log_info("number of events are %d", nev);
     for (int i = 0; i < nev; i++) {
       //Log_info("number of events are %d", nev);
-      Pollable* poll = (Pollable *) evlist[i].data.ptr;
-      verify(poll != nullptr);
+      void* userdata = evlist[i].data.ptr;
+      auto poll = lookup_fn(userdata);  // Get shared_ptr via lookup
+      if (!poll) continue;
+
       if (evlist[i].events & EPOLLIN) {
           poll->handle_read();
       }
       if (evlist[i].events & EPOLLOUT) {
           poll->handle_write();
-      }     
+      }
       // handle error after handle IO, so that we can at least process something
       if (evlist[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
           poll->handle_error();
