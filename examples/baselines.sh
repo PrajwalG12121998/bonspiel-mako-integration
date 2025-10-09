@@ -13,18 +13,18 @@ run_test1() {
         echo -e "${nthreads}\t${throughput}"
     done | sort -n -k1 >> results.txt
 
-    # results on zoo-003
-    #nthreads	throughput
-    #1	61718.1
-    #4	219789
-    #8	422288
-    #16	798361
+    # test on zoo-002
+    #nthreads        throughput
+    #1       71036.5
+    #4       273249
+    #8       551737
+    #16      1.05543e+06
 }
 
 run_test2() {
-    # bash ./examples/test_1shard_replication.sh 1
-    # bash ./examples/test_1shard_replication.sh 4
-    # bash ./examples/test_1shard_replication.sh 8
+    bash ./examples/test_1shard_replication.sh 1
+    bash ./examples/test_1shard_replication.sh 4
+    bash ./examples/test_1shard_replication.sh 8
     bash ./examples/test_1shard_replication.sh 16 
 
     echo -e "nthreads\tthroughput" >> results.txt
@@ -36,6 +36,12 @@ run_test2() {
         echo -e "${nthreads}\t${throughput}"
     done | sort -n -k1 >> results.txt
 
+    # test on zoo-002
+    #nthreads	throughput
+    #1	58514.9
+    #4	222028
+    #8	408499
+    #16	614477
 }
 
 run_test3() {
@@ -67,9 +73,15 @@ run_test3() {
         # Output result
         echo -e "${nthreads}\t${total_throughput}" >> results.txt
 
+        # test on zoo-002 via roce
+        #nthreads	throughput
+        #1	83117.6
+        #4	381676
+        #8	745244
+        #16	1348587
     done
 }
 
-#run_test1
-#run_test2
+run_test1
+run_test2
 run_test3
