@@ -26,6 +26,28 @@ make -j32
 ```
 You should now see libmako.a and a few examples in the build folder, and run all examples via `./ci/ci.sh all`
 
+
+## erpc - socket implementation test
+```bash
+cd ./third-party/erpc
+rm -rf CMakeFiles cmake_install.cmake CMakeCache.txt
+cmake . -DTRANSPORT=fake -DROCE=off -DPERF=off
+make 
+make latency
+```
+
+* Edit the file `scripts/autorun_process_file` like below (server first, then client) 
+```
+130.245.173.102 31850 0
+130.245.173.103 32850 0
+```
+  * We use port `31850` and `32850` to establish the connection for first time, then we use `31850+10000` and `32850+10000` to exchange messages 
+
+* Run the eRPC application (the latency benchmark by default):
+  * At 130.245.173.102: `./scripts/do.sh 0 0 eth`
+  * At 130.245.173.103: `./scripts/do.sh 1 0 eth`
+
+
 <!-- 
 Run the helloworld:
 
