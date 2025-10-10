@@ -1,7 +1,5 @@
 ## TODOs
 
-1. simple shard test cases with contention
+1. disk watermark control
 
-2. disk watermark control
-
-3. simple hello world example
+2. simple hello world example

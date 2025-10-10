@@ -48,6 +48,9 @@ make latency
   * At 130.245.173.103: `./scripts/do.sh 1 0 eth`
 
 
+## Several assumptions
+1. All servers, including all followers, and learners, are managed via nfs. We use it to do some execution flow control.
+
 <!-- 
 Run the helloworld:
 
