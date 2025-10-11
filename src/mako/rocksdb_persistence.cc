@@ -66,13 +66,21 @@ bool RocksDBPersistence::initialize(const std::string& db_path, size_t num_parti
     write_options_.disableWAL = false;
     write_options_.no_slowdown = true;  // Don't slow down writes
 
-    rocksdb::DB* db_raw;
-    rocksdb::Status status = rocksdb::DB::Open(options_, db_path, &db_raw);
-    if (!status.ok()) {
-        fprintf(stderr, "Failed to open RocksDB: %s\n", status.ToString().c_str());
-        return false;
+    // Create separate database file for each partition
+    partition_dbs_.resize(num_partitions_);
+    for (size_t partition_id = 0; partition_id < num_partitions_; ++partition_id) {
+        std::string partition_db_path = db_path + "_partition" + std::to_string(partition_id);
+        rocksdb::DB* db_raw;
+        rocksdb::Status status = rocksdb::DB::Open(options_, partition_db_path, &db_raw);
+        if (!status.ok()) {
+            fprintf(stderr, "Failed to open RocksDB for partition %zu: %s\n",
+                    partition_id, status.ToString().c_str());
+            return false;
+        }
+        partition_dbs_[partition_id].reset(db_raw);
+        fprintf(stderr, "[RocksDB] Partition %zu: opened database at %s\n",
+                partition_id, partition_db_path.c_str());
     }
-    db_.reset(db_raw);
 
     // Initialize epoch to a default value
     // Will be overridden by actual epoch from get_epoch() when used in production
@@ -80,9 +88,8 @@ bool RocksDBPersistence::initialize(const std::string& db_path, size_t num_parti
 
     shutdown_flag_ = false;
 
-    // Use the requested number of worker threads
-    // IMPORTANT: Pass num_threads to each thread, don't rely on worker_threads_.size()
-    // because threads start executing before all threads are added to the vector
+    // Use the requested number of worker threads 
+    // Each worker handles a subset of partitions in round-robin fashion
     for (size_t i = 0; i < num_threads; ++i) {
         worker_threads_.emplace_back(&RocksDBPersistence::workerThread, this, i, num_threads);
     }
@@ -97,6 +104,9 @@ void RocksDBPersistence::shutdown() {
     if (!initialized_) {
         return;
     }
+
+    // Debug logging: track how many writes are pending at shutdown
+    // fprintf(stderr, "[RocksDB Debug] Shutdown starting, pending=%zu\n", pending_writes_.load());
 
     shutdown_flag_ = true;
 
@@ -124,13 +134,18 @@ void RocksDBPersistence::shutdown() {
         }
     }
 
-    if (db_) {
-        db_->FlushWAL(true);
-        db_.reset();
+    // Close all partition databases
+    for (size_t i = 0; i < partition_dbs_.size(); ++i) {
+        if (partition_dbs_[i]) {
+            partition_dbs_[i]->FlushWAL(true);
+            partition_dbs_[i].reset();
+        }
     }
 
+    // Debug logging: indicate shutdown complete
+    // fprintf(stderr, "[RocksDB Debug] Shutdown complete\n");
+
     initialized_ = false;
-    // RocksDB persistence shutdown complete
 }
 
 std::string RocksDBPersistence::generateKey(uint32_t shard_id, uint32_t partition_id,
@@ -162,14 +177,9 @@ uint64_t RocksDBPersistence::getNextSequenceNumber(uint32_t partition_id) {
     return it->second.fetch_add(1);  // Fetch current value and then increment
 }
 
-// Simplified persistAsync - always uses ordered callbacks
 std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size,
                                                    uint32_t shard_id, uint32_t partition_id,
                                                    std::function<void(bool)> callback) {
-    // Serialize all persistAsync calls with a mutex
-    // This is fast since heavy work is done in background threads
-    std::lock_guard<std::mutex> persist_lock(persist_mutex_);
-
     if (!initialized_) {
         // Not initialized - this is normal for followers/learners
         // Return success without doing anything
@@ -195,21 +205,13 @@ std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size
         return error_future;
     }
 
-    // Check queue size to prevent unbounded growth
-    size_t queue_size = pending_writes_.load();
-    if (queue_size > 10000) {  // Backpressure at 10k pending writes
-        fprintf(stderr, "RocksDB queue overflow: %zu pending writes, rejecting new request (size=%zu)\n",
-                queue_size, size);
-        std::promise<bool> error_promise;
-        auto future = error_promise.get_future();
-        error_promise.set_value(false);
-        if (callback) {
-            callback(false);
-        }
-        return future;
-    }
+    auto& pq = partition_queues_[partition_id];
+
+    // Per-partition mutex ensures ordering within this partition only
+    std::lock_guard<std::mutex> partition_lock(pq->seq_mutex);
 
     auto req = std::make_unique<PersistRequest>();
+    req->enqueue_time = std::chrono::high_resolution_clock::now();
 
     uint32_t epoch = current_epoch_.load();
     if (epoch == 0) {
@@ -217,94 +219,86 @@ std::future<bool> RocksDBPersistence::persistAsync(const char* data, size_t size
         current_epoch_.store(epoch);
     }
 
-    // Get sequence number - now guaranteed to be sequential because of persist_mutex
     uint64_t seq_num = getNextSequenceNumber(partition_id);
     req->key = generateKey(shard_id, partition_id, epoch, seq_num);
     req->value.reserve(size);
     req->value.assign(data, size);
     req->partition_id = partition_id;
     req->sequence_number = seq_num;
-    req->require_ordering = true;  // Always ordered now
+    req->require_ordering = true;
     req->size = size;
 
-    // Register callback in partition state (always ordered)
+    // Register callback in partition state
     if (callback) {
         std::lock_guard<std::mutex> state_lock(partition_states_mutex_);
         auto& state = partition_states_[partition_id];
         if (!state) {
             state = std::make_unique<PartitionState>();
-            // Initialize next_expected_seq to first sequence
             state->next_expected_seq.store(seq_num);
         }
 
         std::lock_guard<std::mutex> lock(state->state_mutex);
         state->pending_callbacks[seq_num] = callback;
         state->highest_queued_seq = std::max(state->highest_queued_seq.load(), seq_num);
-        req->callback = nullptr;  // Will be called from processOrderedCallbacks
+        state->enqueue_times[seq_num] = req->enqueue_time;
+        req->callback = nullptr;
     }
 
     auto future = req->promise.get_future();
 
-    // Push to partition-specific queue
-    auto& pq = partition_queues_[partition_id];
+    // Push to partition queue
     {
-        std::lock_guard<std::mutex> lock(pq->mutex);
+        std::lock_guard<std::mutex> lock(pq->queue_mutex);
         pq->queue.push(std::move(req));
         pq->pending_writes.fetch_add(1);
         pending_writes_.fetch_add(1);
     }
     pq->cv.notify_one();
 
+    // Log pending requests on every persistAsync call
+    if (seq_num % 100 == 0) {
+        fprintf(stderr, "[RocksDB Pending] partition=%u, pending=%zu (total_pending=%zu)\n",
+                partition_id, pq->pending_writes.load(), pending_writes_.load());
+    }
+
     return future;
 }
 
 void RocksDBPersistence::workerThread(size_t worker_id, size_t total_workers) {
-    std::vector<std::unique_ptr<PersistRequest>> batch;
-    const size_t MAX_BATCH_SIZE = 100;  // Process up to 100 writes at once
-    const size_t MAX_BATCH_BYTES = 10 * 1024 * 1024;  // 10MB max batch size
-
     // Each worker processes a subset of partitions in round-robin fashion
-    // Use total_workers parameter instead of worker_threads_.size() to avoid race condition
     std::vector<size_t> my_partitions;
     for (size_t i = worker_id; i < num_partitions_; i += total_workers) {
         my_partitions.push_back(i);
     }
 
-    fprintf(stderr, "[RocksDB Worker %zu] Handling %zu partitions: ", worker_id, my_partitions.size());
-    for (size_t pid : my_partitions) {
-        fprintf(stderr, "%zu ", pid);
-    }
-    fprintf(stderr, "\n");
+    // Debug logging: show partition assignment
+    // fprintf(stderr, "[RocksDB Worker %zu] Handling %zu partitions: ", worker_id, my_partitions.size());
+    // for (size_t pid : my_partitions) {
+    //     fprintf(stderr, "%zu ", pid);
+    // }
+    // fprintf(stderr, "\n");
 
     while (!shutdown_flag_) {
-        batch.clear();
-        size_t batch_bytes = 0;
-        bool got_request = false;
+        std::unique_ptr<PersistRequest> req = nullptr;
 
-        // Try to collect requests from all partitions this worker handles
+        // Try to get ONE request from any partition this worker handles
         for (size_t partition_id : my_partitions) {
             auto& pq = partition_queues_[partition_id];
+            std::unique_lock<std::mutex> lock(pq->queue_mutex);
 
-            std::unique_lock<std::mutex> lock(pq->mutex);
-
-            // Collect requests from this partition
-            while (!pq->queue.empty() &&
-                   batch.size() < MAX_BATCH_SIZE &&
-                   batch_bytes < MAX_BATCH_BYTES) {
-                auto& req = pq->queue.front();
-                batch_bytes += req->value.size();
-                batch.push_back(std::move(pq->queue.front()));
+            if (!pq->queue.empty()) {
+                req = std::move(pq->queue.front());
                 pq->queue.pop();
                 pq->pending_writes.fetch_sub(1);
-                got_request = true;
+                break;  // Got a request, process it
             }
         }
 
-        // If no requests, wait on the first partition queue we handle
-        if (!got_request && !my_partitions.empty()) {
+        // If no request found, wait
+        if (!req && !my_partitions.empty()) {
             size_t wait_partition = my_partitions[0];
             auto& pq = partition_queues_[wait_partition];
-            std::unique_lock<std::mutex> lock(pq->mutex);
+            std::unique_lock<std::mutex> lock(pq->queue_mutex);
             pq->cv.wait_for(lock, std::chrono::milliseconds(10), [&pq, this] {
                 return !pq->queue.empty() || shutdown_flag_;
             });
@@ -322,75 +316,85 @@ void RocksDBPersistence::workerThread(size_t worker_id, size_t total_workers) {
                     break;
                 }
             }
-            continue;  // Retry collecting requests
+            continue;
         }
 
-        if (!batch.empty()) {
+        // Process single request
+        if (req) {
             auto start_time = std::chrono::high_resolution_clock::now();
 
-            // Use WriteBatch for better performance
-            rocksdb::WriteBatch write_batch;
-            for (const auto& req : batch) {
-                write_batch.Put(req->key, req->value);
-            }
-
-            rocksdb::Status status = db_->Write(write_options_, &write_batch);
+            // Write to partition-specific database
+            uint32_t partition_id = req->partition_id;
+            rocksdb::Status status = partition_dbs_[partition_id]->Put(write_options_, req->key, req->value);
             auto end_time = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
 
             bool success = status.ok();
+            req->disk_complete_time = end_time;
 
-            // Process callbacks and promises for all requests in batch
-            for (auto& req : batch) {
-                if (req->require_ordering) {
-                    // Handle ordered callback
-                    handlePersistComplete(req->partition_id, req->sequence_number,
-                                        nullptr, success);  // Callback already stored in partition state
-                } else if (req->callback) {
-                    req->callback(success);
-                }
-                req->promise.set_value(success);
-                pending_writes_.fetch_sub(1);
+            if (req->require_ordering) {
+                handlePersistComplete(req->partition_id, req->sequence_number,
+                                    nullptr, success, req->enqueue_time, req->disk_complete_time);
+            } else if (req->callback) {
+                req->callback(success);
             }
+            req->promise.set_value(success);
+            pending_writes_.fetch_sub(1);
 
             if (!success) {
-                fprintf(stderr, "[RocksDB Worker %zu] Batch write failed (%zu requests, %zu bytes, duration=%ldms): %s\n",
-                       worker_id, batch.size(), batch_bytes, duration.count(), status.ToString().c_str());
-            } else if (batch_bytes > 100000) {  // Log large batches
-                fprintf(stderr, "[RocksDB Worker %zu] Batch write success: %zu requests, %zu bytes, duration=%ldms, pending=%zu\n",
-                       worker_id, batch.size(), batch_bytes, duration.count(), pending_writes_.load());
+                fprintf(stderr, "[RocksDB] Write failed (partition=%u, %zu bytes, duration=%ldus): %s\n",
+                       req->partition_id, req->value.size(), duration.count(), status.ToString().c_str());
             }
         }
     }
 
-    fprintf(stderr, "[RocksDB Worker %zu] Shutting down\n", worker_id);
+    // Debug logging: worker shutdown
+    // fprintf(stderr, "[RocksDB Worker %zu] Shutting down\n", worker_id);
 }
 
 bool RocksDBPersistence::flushAll() {
-    if (!db_) {
+    if (partition_dbs_.empty()) {
         return false;
     }
 
     rocksdb::FlushOptions flush_options;
     flush_options.wait = true;
-    rocksdb::Status status = db_->Flush(flush_options);
 
-    if (!status.ok()) {
-        fprintf(stderr, "RocksDB flush failed: %s\n", status.ToString().c_str());
+    // Flush all partition databases
+    bool all_success = true;
+    for (size_t i = 0; i < partition_dbs_.size(); ++i) {
+        if (partition_dbs_[i]) {
+            rocksdb::Status status = partition_dbs_[i]->Flush(flush_options);
+            if (!status.ok()) {
+                fprintf(stderr, "RocksDB flush failed for partition %zu: %s\n", i, status.ToString().c_str());
+                all_success = false;
+            }
+        }
+    }
+
+    if (!all_success) {
+        fprintf(stderr, "RocksDB flush failed for some partitions\n");
         return false;
     }
 
-    status = db_->FlushWAL(true);
-    if (!status.ok()) {
-        fprintf(stderr, "RocksDB WAL flush failed: %s\n", status.ToString().c_str());
-        return false;
+    // Flush WAL for all partition databases
+    for (size_t i = 0; i < partition_dbs_.size(); ++i) {
+        if (partition_dbs_[i]) {
+            rocksdb::Status status = partition_dbs_[i]->FlushWAL(true);
+            if (!status.ok()) {
+                fprintf(stderr, "RocksDB WAL flush failed for partition %zu: %s\n", i, status.ToString().c_str());
+                all_success = false;
+            }
+        }
     }
 
-    return true;
+    return all_success;
 }
 
 void RocksDBPersistence::handlePersistComplete(uint32_t partition_id, uint64_t sequence_number,
-                                              std::function<void(bool)> callback, bool success) {
+                                              std::function<void(bool)> callback, bool success,
+                                              std::chrono::high_resolution_clock::time_point enqueue_time,
+                                              std::chrono::high_resolution_clock::time_point disk_complete_time) {
     std::lock_guard<std::mutex> state_lock(partition_states_mutex_);
     auto it = partition_states_.find(partition_id);
     if (it == partition_states_.end()) {
@@ -408,6 +412,11 @@ void RocksDBPersistence::handlePersistComplete(uint32_t partition_id, uint64_t s
     state->persisted_sequences.insert(sequence_number);
     state->persist_results[sequence_number] = success;
 
+    // Store disk completion time for this sequence
+    if (disk_complete_time.time_since_epoch().count() > 0) {
+        state->disk_complete_times[sequence_number] = disk_complete_time;
+    }
+
     // Process any callbacks that are now ready
     processOrderedCallbacks(partition_id);
 }
@@ -422,8 +431,15 @@ void RocksDBPersistence::processOrderedCallbacks(uint32_t partition_id) {
     auto& state = it->second;
     uint64_t next_seq = state->next_expected_seq.load();
 
-    // Collect callbacks to execute (without holding locks)
-    std::vector<std::pair<uint64_t, std::function<void(bool)>>> callbacks_to_execute;
+    // Collect callbacks to execute (with timing info for debugging)
+    struct CallbackInfo {
+        bool success;
+        std::function<void(bool)> callback;
+        std::chrono::high_resolution_clock::time_point enqueue_time;
+        std::chrono::high_resolution_clock::time_point disk_complete_time;
+        uint64_t seq_num;
+    };
+    std::vector<CallbackInfo> callbacks_to_execute;
 
     // Process all callbacks that are ready (all previous sequences persisted)
     while (state->persisted_sequences.count(next_seq) > 0) {
@@ -441,8 +457,25 @@ void RocksDBPersistence::processOrderedCallbacks(uint32_t partition_id) {
         // Find and save the callback for execution
         auto callback_it = state->pending_callbacks.find(next_seq);
         if (callback_it != state->pending_callbacks.end()) {
-            // Store callback and result for later execution
-            callbacks_to_execute.push_back({success, callback_it->second});
+            CallbackInfo info;
+            info.success = success;
+            info.callback = callback_it->second;
+            info.seq_num = next_seq;
+
+            // Get timing info for debugging
+            auto enqueue_it = state->enqueue_times.find(next_seq);
+            if (enqueue_it != state->enqueue_times.end()) {
+                info.enqueue_time = enqueue_it->second;
+                state->enqueue_times.erase(enqueue_it);
+            }
+
+            auto disk_it = state->disk_complete_times.find(next_seq);
+            if (disk_it != state->disk_complete_times.end()) {
+                info.disk_complete_time = disk_it->second;
+                state->disk_complete_times.erase(disk_it);
+            }
+
+            callbacks_to_execute.push_back(std::move(info));
             state->pending_callbacks.erase(callback_it);
         }
 
@@ -451,12 +484,34 @@ void RocksDBPersistence::processOrderedCallbacks(uint32_t partition_id) {
         next_seq++;
     }
 
-    // NOTE: We are still holding state->state_mutex here (via lock_guard in caller)
-    // The lock will be released when we return, then we need to execute callbacks
-    // But wait - the caller has a lock_guard, so we can't easily release it early
-    // We need to execute callbacks while holding the lock (should be fast)
-    for (auto& [success, callback] : callbacks_to_execute) {
-        callback(success);
+    // Execute callbacks
+    // Debug: calculate and log timing for performance analysis
+    // auto callback_execute_time = std::chrono::high_resolution_clock::now();
+    for (auto& info : callbacks_to_execute) {
+        // Debug timing calculations (commented out for production)
+        // long queue_latency_us = 0;
+        // long callback_wait_us = 0;
+        // long total_latency_us = 0;
+        // if (info.enqueue_time.time_since_epoch().count() > 0) {
+        //     if (info.disk_complete_time.time_since_epoch().count() > 0) {
+        //         queue_latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        //             info.disk_complete_time - info.enqueue_time).count();
+        //         callback_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        //             callback_execute_time - info.disk_complete_time).count();
+        //     }
+        //     total_latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        //         callback_execute_time - info.enqueue_time).count();
+        // }
+        //
+        // // Log timing for every 100th callback or if >1s latency
+        // static std::atomic<uint64_t> callback_counter{0};
+        // uint64_t cb_count = callback_counter.fetch_add(1);
+        // if (cb_count % 100 == 0 || total_latency_us > 1000000) {
+        //     fprintf(stderr, "[RocksDB Timing] partition=%u, seq=%llu: total=%ldus (queue=%ldus, callback_wait=%ldus)\n",
+        //             partition_id, info.seq_num, total_latency_us, queue_latency_us, callback_wait_us);
+        // }
+
+        info.callback(info.success);
     }
 }
 

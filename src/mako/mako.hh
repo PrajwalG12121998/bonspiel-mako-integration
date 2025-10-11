@@ -150,6 +150,9 @@ static void register_paxos_follower_callback(TSharedThreadPoolMbta& replicated_d
       // update the timestamp for this Paxos stream so that not blocking other Paxos streams
       uint32_t min_so_far = numeric_limits<uint32_t>::max();
       sync_util::sync_logger::local_timestamp_[par_id].store(min_so_far, memory_order_release) ;
+#ifndef DISABLE_DISK
+      sync_util::sync_logger::disk_timestamp_[par_id].store(min_so_far, memory_order_release) ;
+#endif
       benchConfig.incrementEndReceived();
     }
 
@@ -190,6 +193,10 @@ static void register_paxos_follower_callback(TSharedThreadPoolMbta& replicated_d
         CommitInfo commit_info = get_latest_commit_info((char *) log, len);
         timestamp = commit_info.timestamp;  // Store for return value encoding
         sync_util::sync_logger::local_timestamp_[par_id].store(commit_info.timestamp, memory_order_release) ;
+#ifndef DISABLE_DISK
+        // Followers don't persist to disk, so immediately update disk_timestamp_ too
+        sync_util::sync_logger::disk_timestamp_[par_id].store(commit_info.timestamp, memory_order_release) ;
+#endif
         uint32_t w = sync_util::sync_logger::retrieveW();
         // Single timestamp safety check
         // Warning("checking par_id:%d, un_replay_logs_:%d,ours:%u,w:%u", 
@@ -299,6 +306,9 @@ static void register_paxos_leader_callback(vector<pair<uint32_t, uint32_t>>& adv
       Warning("Recieved a zero length log");
       uint32_t min_so_far = numeric_limits<uint32_t>::max();
       sync_util::sync_logger::local_timestamp_[par_id].store(min_so_far, memory_order_release) ;
+#ifndef DISABLE_DISK
+      sync_util::sync_logger::disk_timestamp_[par_id].store(min_so_far, memory_order_release) ;
+#endif
       benchConfig.incrementEndReceivedLeader();
     }
 
@@ -680,10 +690,10 @@ static void init_env() {
       std::string db_path = "/tmp/mako_rocksdb_shard" + std::to_string(benchConfig.getShardIndex())
                             + "_leader_pid" + std::to_string(getpid());
       size_t num_partitions = benchConfig.getNthreads();  // One partition per worker thread
-      size_t num_bg_threads = std::max(1UL, num_partitions / 2);  // Half as many background workers as partitions
-      fprintf(stderr, "Leader initializing RocksDB at path: %s with %zu partitions and %zu background threads\n",
-              db_path.c_str(), num_partitions, num_bg_threads);
-      if (!persistence.initialize(db_path, num_partitions, num_bg_threads)) {
+      size_t num_threads = num_partitions;  // Same number of RocksDB workers as partitions
+      fprintf(stderr, "Leader initializing RocksDB at path: %s with %zu partitions and %zu worker threads\n",
+              db_path.c_str(), num_partitions, num_threads);
+      if (!persistence.initialize(db_path, num_partitions, num_threads)) {
           fprintf(stderr, "WARNING: RocksDB initialization failed for %s\n", db_path.c_str());
       } else {
           // Now that Paxos is initialized, update the epoch

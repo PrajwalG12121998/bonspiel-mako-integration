@@ -1,6 +1,7 @@
 #include "Transaction.hh"
 #include <typeinfo>
 #include <atomic>
+#include <array>
 #include <iostream>
 #include "MassTrans.hh"
 #include "deptran/s_main.h"
@@ -779,18 +780,33 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
         // Asynchronously persist to RocksDB
         auto& persistence = mako::RocksDBPersistence::getInstance();
         uint32_t shard_id = BenchmarkConfig::getInstance().getShardIndex();
-        static std::atomic<uint64_t> helper_persist_success{0};
-        static std::atomic<uint64_t> helper_persist_fail{0};
-        persistence.persistAsync((const char*)queueLog, pos, shard_id, TThread::getPartitionID(),
-            [](bool success) {
+
+        // Per-partition success/failure counters (max 64 partitions)
+        static std::array<std::atomic<uint64_t>, 64> per_partition_success{};
+        static std::array<std::atomic<uint64_t>, 64> per_partition_fail{};
+
+        // Capture the timestamp and partition ID for the callback
+        uint32_t persist_timestamp = instance->latest_commit_timestamp;
+        int partition_id = TThread::getPartitionID();
+
+        persistence.persistAsync((const char*)queueLog, pos, shard_id, partition_id,
+            [persist_timestamp, partition_id](bool success) {
                 if (success) {
-                    helper_persist_success.fetch_add(1, std::memory_order_relaxed);
-                    std::cout << "[RocksDB Helper] Persisted " << helper_persist_success.load()
-                                  << " helper thread logs to disk" << std::endl;
+                    // Update disk persistence timestamp for this partition
+                    sync_util::sync_logger::updateDiskTimestamp(partition_id, persist_timestamp);
+
+                    uint64_t count = per_partition_success[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
+                    // Log every successful persist
+                    if (count % 100 == 0) {
+                        std::cout << "[RocksDB Helper] par_id=" << partition_id
+                                      << ", success=" << count
+                                      << ", failed=" << per_partition_fail[partition_id].load()
+                                      << std::endl;
+                    }
                 } else {
-                    helper_persist_fail.fetch_add(1, std::memory_order_relaxed);
-                    std::cerr << "[RocksDB Helper] Failed to persist log (total failures: "
-                              << helper_persist_fail.load() << ")" << std::endl;
+                    uint64_t fail_count = per_partition_fail[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
+                    std::cerr << "[RocksDB Helper] Persist FAILED: par_id=" << partition_id
+                              << ", total_failures=" << fail_count << std::endl;
                 }
             });
 #endif
