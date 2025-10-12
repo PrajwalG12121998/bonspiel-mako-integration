@@ -5,7 +5,7 @@ set(CMAKE_CXX_COMPILER "g++" CACHE STRING "C++ compiler")
 project(mako)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Configure and enable rusy-cpp-checker

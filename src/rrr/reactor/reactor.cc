@@ -26,9 +26,9 @@ std::shared_ptr<Coroutine> Coroutine::CurrentCoroutine() {
 // @unsafe - Creates and runs a new coroutine with function wrapping
 // SAFETY: Reactor manages coroutine lifecycle properly
 std::shared_ptr<Coroutine>
-Coroutine::CreateRun(std::function<void()> func) {
+Coroutine::CreateRun(std::move_only_function<void()> func) {
   auto& reactor = *Reactor::GetReactor();
-  auto coro = reactor.CreateRunCoroutine(func);
+  auto coro = reactor.CreateRunCoroutine(std::move(func));
   // some events might be triggered in the last coroutine.
   return coro;
 }
@@ -52,15 +52,15 @@ Reactor::GetReactor() {
 // @unsafe - Creates and runs coroutine with complex state management
 // SAFETY: Proper lifecycle management with shared_ptr
 std::shared_ptr<Coroutine>
-Reactor::CreateRunCoroutine(const std::function<void()> func) {
+Reactor::CreateRunCoroutine(std::move_only_function<void()> func) {
   std::shared_ptr<Coroutine> sp_coro;
   if (REUSING_CORO && available_coros_.size() > 0) {
     //Log_info("Reusing stuff");
     sp_coro = available_coros_.back();
     available_coros_.pop_back();
-    sp_coro->func_ = func;
+    sp_coro->func_ = std::move(func);
   } else {
-    sp_coro = std::make_shared<Coroutine>(func);
+    sp_coro = std::make_shared<Coroutine>(std::move(func));
   }
   
   // Save old coroutine context

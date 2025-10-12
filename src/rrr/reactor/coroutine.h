@@ -36,18 +36,19 @@ class Coroutine {
  public:
   static std::shared_ptr<Coroutine> CurrentCoroutine();
   // the argument cannot be a reference because it could be declared on stack.
-  static std::shared_ptr<Coroutine> CreateRun(std::function<void()> func);
+  // Using std::move_only_function to support move-only callables (e.g., lambdas capturing rusty::Box)
+  static std::shared_ptr<Coroutine> CreateRun(std::move_only_function<void()> func);
 
   enum Status {INIT=0, STARTED, PAUSED, RESUMED, FINISHED, RECYCLED};
 
   Status status_ = INIT; //
-  std::function<void()> func_{};
+  std::move_only_function<void()> func_{};
 
   std::unique_ptr<boost_coro_task_t> up_boost_coro_task_{};
   boost::optional<boost_coro_yield_t&> boost_coro_yield_{};
 
   Coroutine() = delete;
-  Coroutine(std::function<void()> func);
+  Coroutine(std::move_only_function<void()> func);
   ~Coroutine();
   void BoostRunWrapper(boost_coro_yield_t& yield);
   void Run();
@@ -55,4 +56,5 @@ class Coroutine {
   void Continue();
   bool Finished();
 };
+
 } // namespace rrr

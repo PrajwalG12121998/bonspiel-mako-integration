@@ -225,17 +225,11 @@ void ServerConnection::handle_read() {
 
         auto it = server_->handlers_.find(rpc_id);
         if (it != server_->handlers_.end()) {
-            // CONSTRAINT: Coroutine::CreateRun uses std::function, which requires copyable callables.
-            // Lambdas with rusty::Box captures (even using [req=std::move(req)]) are move-only.
-            // WORKAROUND: Use raw pointer. This is SAFE from double-delete because:
-            //   1. release() transfers ownership OUT of the original rusty::Box
-            //   2. Lambda wraps it back into rusty::Box, which then owns it exclusively
-            // RISK: Memory leak if lambda never executes (unlikely - CreateRun rarely throws)
-            Request* req_raw = req.release();
+            // C++23 std::move_only_function allows direct capture of move-only types like rusty::Box
+            // Lambda captures rusty::Box<Request> by move, maintaining single ownership semantics
             auto weak_this = weak_self_;
-            Coroutine::CreateRun([it, req_raw, weak_this] () {
-                // Take ownership immediately with rusty::Box
-                rusty::Box<Request> req(req_raw);
+            Coroutine::CreateRun([it, req = std::move(req), weak_this] () mutable {
+                // Move rusty::Box to handler, transferring ownership
                 it->second(std::move(req), weak_this);
 
                 // Lock weak_ptr to access block_read_in

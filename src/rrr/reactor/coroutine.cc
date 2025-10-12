@@ -8,7 +8,7 @@
 
 namespace rrr {
 
-Coroutine::Coroutine(std::function<void()> func) : func_(std::move(func)), status_(INIT) {
+Coroutine::Coroutine(std::move_only_function<void()> func) : func_(std::move(func)), status_(INIT) {
 }
 
 Coroutine::~Coroutine() {
