@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <chrono>
 #include <algorithm>
+#include <ctime>
 #include <rocksdb/write_batch.h>
 #include "../deptran/s_main.h"
 
@@ -19,12 +20,15 @@ RocksDBPersistence& RocksDBPersistence::getInstance() {
     return instance;
 }
 
-bool RocksDBPersistence::initialize(const std::string& db_path, size_t num_partitions, size_t num_threads) {
+bool RocksDBPersistence::initialize(const std::string& db_path, size_t num_partitions, size_t num_threads,
+                                    uint32_t shard_id, uint32_t num_shards) {
     if (initialized_) {
         return true;
     }
 
-    num_partitions_ = num_partitions;
+    num_partitions_ = num_partitions; // the number of worker thread per shard
+    shard_id_ = shard_id;
+    num_shards_ = num_shards;
 
     // Initialize per-partition queues
     partition_queues_.resize(num_partitions_);
@@ -164,7 +168,48 @@ uint32_t RocksDBPersistence::getCurrentEpoch() const {
 }
 
 void RocksDBPersistence::setEpoch(uint32_t epoch) {
-    current_epoch_.store(epoch);
+    uint32_t old_epoch = current_epoch_.exchange(epoch);
+    if (old_epoch != epoch && initialized_) {
+        // Epoch changed, update metadata
+        writeMetadata(shard_id_, num_shards_);
+        fprintf(stderr, "[RocksDB] Epoch changed from %u to %u, metadata updated\n", old_epoch, epoch);
+    }
+}
+
+bool RocksDBPersistence::writeMetadata(uint32_t shard_id, uint32_t num_shards) {
+    if (!initialized_ || partition_dbs_.empty()) {
+        return false;
+    }
+
+    // Store shard info for later use
+    shard_id_ = shard_id;
+    num_shards_ = num_shards;
+
+    // Get current timestamp
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+    // Create simple key:value,key:value format metadata string
+    std::stringstream meta_ss;
+    meta_ss << "epoch:" << current_epoch_.load()
+            << ",shard_id:" << shard_id
+            << ",num_shards:" << num_shards
+            << ",num_partitions:" << num_partitions_
+            << ",num_workers:" << worker_threads_.size()
+            << ",timestamp:" << timestamp;
+
+    std::string meta_value = meta_ss.str();
+
+    // Write to partition 0's database with key "meta"
+    rocksdb::Status status = partition_dbs_[0]->Put(write_options_, "meta", meta_value);
+
+    if (status.ok()) {
+        fprintf(stderr, "[RocksDB] Metadata written: %s\n", meta_value.c_str());
+        return true;
+    } else {
+        fprintf(stderr, "[RocksDB] Failed to write metadata: %s\n", status.ToString().c_str());
+        return false;
+    }
 }
 
 uint64_t RocksDBPersistence::getNextSequenceNumber(uint32_t partition_id) {

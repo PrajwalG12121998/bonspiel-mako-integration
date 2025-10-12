@@ -689,14 +689,18 @@ static void init_env() {
       auto& persistence = mako::RocksDBPersistence::getInstance();
       std::string db_path = "/tmp/mako_rocksdb_shard" + std::to_string(benchConfig.getShardIndex())
                             + "_leader_pid" + std::to_string(getpid());
-      size_t num_partitions = benchConfig.getNthreads();  // One partition per worker thread
-      size_t num_threads = num_partitions;  // Same number of RocksDB workers as partitions
+      size_t num_partitions = benchConfig.getNthreads();
+      size_t num_threads = num_partitions;
+      uint32_t shard_id = benchConfig.getShardIndex();
+      uint32_t num_shards = benchConfig.getNshards();
+
       fprintf(stderr, "Leader initializing RocksDB at path: %s with %zu partitions and %zu worker threads\n",
               db_path.c_str(), num_partitions, num_threads);
-      if (!persistence.initialize(db_path, num_partitions, num_threads)) {
+      if (!persistence.initialize(db_path, num_partitions, num_threads, shard_id, num_shards)) {
           fprintf(stderr, "WARNING: RocksDB initialization failed for %s\n", db_path.c_str());
       } else {
-          // Now that Paxos is initialized, update the epoch
+          // Write initial metadata and set epoch
+          persistence.writeMetadata(shard_id, num_shards);
           persistence.setEpoch(get_epoch());
       }
     }

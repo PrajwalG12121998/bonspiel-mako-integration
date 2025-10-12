@@ -60,11 +60,14 @@ public:
      * @param db_path Path to RocksDB database directory
      * @param num_partitions Number of data partitions (typically one per application worker thread)
      * @param num_threads Number of background I/O worker threads for RocksDB
+     * @param shard_id Shard ID for this instance
+     * @param num_shards Total number of shards in the system
      *
      * Note: num_threads can be less than num_partitions. Each background thread handles
      * multiple partitions in round-robin fashion. Recommended: num_threads = max(1, num_partitions/2)
      */
-    bool initialize(const std::string& db_path, size_t num_partitions, size_t num_threads = 8);
+    bool initialize(const std::string& db_path, size_t num_partitions, size_t num_threads = 8,
+                    uint32_t shard_id = 0, uint32_t num_shards = 1);
     void shutdown();
 
     // Persist data asynchronously with ordered callback execution
@@ -82,6 +85,9 @@ public:
     size_t getPendingWrites() const { return pending_writes_.load(); }
 
     bool flushAll();
+
+    // Write metadata (epoch, num_partitions, num_shards, etc.) to partition 0
+    bool writeMetadata(uint32_t shard_id, uint32_t num_shards);
 
 private:
     RocksDBPersistence();
@@ -126,6 +132,8 @@ private:
     std::unordered_map<uint32_t, std::unique_ptr<PartitionState>> partition_states_;
     std::mutex partition_states_mutex_;
 
+    uint32_t shard_id_{0};
+    uint32_t num_shards_{0};
 
     bool initialized_{false};
 };

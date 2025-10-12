@@ -12,23 +12,26 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: self-hosted 
+    runs-on: self-hosted
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         build_type: [Release]
+        run_number: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive  # if you use submodules (e.g., third-party libs)
 
-      - name: Environments 
+      - name: Environments
         run: |
           pwd
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
           echo "RUNNER_TEMP=$RUNNER_TEMP"
           echo "RUNNER_TOOL_CACHE=$RUNNER_TOOL_CACHE"
+          echo "RUN_NUMBER=${{ matrix.run_number }}"
 
       - name: Compile
         run: ./ci/ci.sh compile 
