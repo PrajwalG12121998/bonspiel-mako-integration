@@ -22,6 +22,9 @@ void setup_helper(
   abstract_db *db,
   const std::map<int, abstract_ordered_index *> &open_tables);
 
+// Add or update a table mapping for already running helper threads.
+void setup_update_table(int table_id, abstract_ordered_index *table);
+
 // Signal helper threads to stop processing requests.
 void stop_helper();
 

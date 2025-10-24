@@ -17,6 +17,7 @@
 #include "benchmarks/tpcc.h"
 #include "benchmarks/benchmark_config.h"
 #include "lib/common.h"
+#include "benchmarks/rpc_setup.h"
 #include "mbta_sharded_ordered_index.hh"
 
 // We have to do it on the coordinator instead of transaction.cc, because it only has a local copy of the readSet;
@@ -1133,6 +1134,7 @@ public:
       std::cout << "existing table is createded with name: " << name 
               << ", table-id: " << tbl->get_table_id()
               << ", on shard-server id:" << shard_index << std::endl;
+      mako::setup_update_table(table_id, tbl);
       return tbl ;
     }
 
@@ -1165,6 +1167,7 @@ public:
     std::cout << "new table is createded with name: " << name 
               << ", table-id: " << tbl->get_table_id()
               << ", on shard-server id:" << shard_index << std::endl;
+    mako::setup_update_table(available_table_id, tbl);
     return tbl;
   }
 

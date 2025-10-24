@@ -6,6 +6,7 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <map>
 #include "lib/fasttransport.h"
 #include "lib/timestamp.h"
 #include "lib/common.h"
@@ -27,6 +28,7 @@ namespace mako
                  const map<int, abstract_ordered_index *> &open_tables_table_id /*,
                  const map<string, vector<abstract_ordered_index *>> &partitions,
                  const map<string, vector<abstract_ordered_index *>> &remote_partitions*/);
+        void UpdateTableEntry(int table_id, abstract_ordered_index *table);
 
         // Message handlers.
         size_t ReceiveRequest(uint8_t reqType, char *reqBuf, char *respBuf);
@@ -90,6 +92,7 @@ namespace mako
                  const map<int, abstract_ordered_index *> &open_tables /*,
                  const map<string, vector<abstract_ordered_index *>> &partitions,
                  const map<string, vector<abstract_ordered_index *>> &remote_partitions*/);
+        void UpdateTable(int table_id, abstract_ordered_index *table);
         void Run();
 
     protected:

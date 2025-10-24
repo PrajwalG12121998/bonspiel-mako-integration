@@ -482,9 +482,9 @@ int main(int argc, char **argv) {
 
     if (benchConfig.getLeaderConfig()) {
         // pre-declare sharded tables
+        mako::setup_erpc_server();
         mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
 
-        mako::setup_erpc_server();
         map<int, abstract_ordered_index*> open_tables;
         auto *local_table = table->shard_for_index(benchConfig.getShardIndex());
         if (local_table) {

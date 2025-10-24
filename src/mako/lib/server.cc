@@ -45,6 +45,13 @@ namespace mako
         obj_v.reserve(256);
     }
 
+    void ShardReceiver::UpdateTableEntry(int table_id, abstract_ordered_index *table)
+    {
+        if (table_id <= 0 || !table)
+            return;
+        open_tables_table_id[table_id] = table;
+    }
+
     // Message handlers.
     size_t ShardReceiver::ReceiveRequest(uint8_t reqType, char *reqBuf, char *respBuf)
     {
@@ -549,10 +556,16 @@ namespace mako
         db = dbX;
         queue = queueX;
         queue_response = queueY;
-
         open_tables_table_id = open_tablesX;
-
         shardReceiver->Register(db, open_tables_table_id);
+    }
+
+    void ShardServer::UpdateTable(int table_id, abstract_ordered_index *table)
+    {
+        if (table_id > 0 && table) {
+            open_tables_table_id[table_id] = table;
+        }
+        shardReceiver->UpdateTableEntry(table_id, table);
     }
 
     void ShardServer::Run()

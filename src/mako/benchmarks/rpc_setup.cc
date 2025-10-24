@@ -2,6 +2,9 @@
 
 #include "rpc_setup.h"
 
+#include <algorithm>
+#include <map>
+#include <mutex>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -17,6 +20,9 @@ using namespace std;
 using namespace mako;
 
 namespace {
+
+std::mutex g_helper_mu;
+std::vector<mako::ShardServer *> g_helper_servers;
 
 static inline size_t NumWarehouses() {
   return (size_t) BenchmarkConfig::getInstance().getScaleFactor();
@@ -37,9 +43,7 @@ void helper_server(
   abstract_db *db,
   mako::HelperQueue *queue,
   mako::HelperQueue *queue_response,
-  std::map<int, abstract_ordered_index *> open_tables/*,
-  const std::map<std::string, std::vector<abstract_ordered_index *>> &partitions,
-  const std::map<std::string, std::vector<abstract_ordered_index *>> &remote_partitions*/)
+  std::map<int, abstract_ordered_index *> open_tables)
 {
   scoped_db_thread_ctx ctx(db, true, 1);
   TThread::set_mode(1);
@@ -56,7 +60,11 @@ void helper_server(
 
   mako::ShardServer *ss = new mako::ShardServer(
     config->configFile, running_shardIndex, shardIdx, par_id);
-  ss->Register(db, queue, queue_response, open_tables/*, partitions, remote_partitions*/);
+  ss->Register(db, queue, queue_response, open_tables);
+  {
+    std::lock_guard<std::mutex> lock(g_helper_mu);
+    g_helper_servers.push_back(ss);
+  }
   ss->Run(); // event-driven
 }
 
@@ -121,11 +129,20 @@ void mako::setup_helper(
       db,
       queue_holders[i],
       queue_holders_response[i],
-      open_tables/*,
-      std::cref(partitions),
-      std::cref(remote_partitions)*/);
+      open_tables);
     pthread_setname_np(t.native_handle(), ("helper_" + std::to_string(i)).c_str());
     t.detach();
+  }
+}
+
+void mako::setup_update_table(int table_id, abstract_ordered_index *table)
+{
+  if (!table)
+    return;
+
+  std::lock_guard<std::mutex> lock(g_helper_mu);
+  for (auto *server : g_helper_servers) {
+    server->UpdateTable(table_id, table);
   }
 }
 
@@ -136,7 +153,11 @@ void mako::stop_helper()
   for (auto &entry : queue_holders) {
     if (entry.second) {
       entry.second->request_stop();
-    }
+    } 
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_helper_mu);
+    g_helper_servers.clear();
   }
 }
 
