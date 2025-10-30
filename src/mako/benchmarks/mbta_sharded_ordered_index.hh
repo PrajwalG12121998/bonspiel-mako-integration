@@ -113,6 +113,9 @@ public:
         size_t shard_count,
         const std::function<abstract_ordered_index *(size_t)> &open_fn);
 
+  // Return the shard ID for a given key (for cross-shard detection)
+  int check_shard(const lcdf::Str &key) const;
+
 private:
   static size_t hash_key(const lcdf::Str &key);
 
@@ -245,6 +248,14 @@ mbta_sharded_ordered_index::pick_shard(const lcdf::Str &key) const {
   }
   size_t shard = hash_key(key) % shard_tables_.size();
   return shard_tables_[shard];
+}
+
+inline int
+mbta_sharded_ordered_index::check_shard(const lcdf::Str &key) const {
+  if (shard_tables_.size() == 1) {
+    return 0;
+  }
+  return static_cast<int>(hash_key(key) % shard_tables_.size());
 }
 
 #endif  // MAKO_BENCHMARKS_MBTA_SHARDED_ORDERED_INDEX_HH

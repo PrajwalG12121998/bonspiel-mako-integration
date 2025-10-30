@@ -19,6 +19,8 @@ public:
 
     void initialize() {
         scoped_db_thread_ctx ctx(db, false);
+        // force multiversion
+        TThread::enable_multiverison();
     }
 
     void test_basic_transactions() {

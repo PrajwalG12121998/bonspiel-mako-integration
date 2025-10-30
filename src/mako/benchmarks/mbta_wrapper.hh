@@ -984,7 +984,11 @@ public:
 #if defined(DISABLE_MULTI_VERSION)
     TThread::disable_multiversion();
 #else
-    TThread::enable_multiverison();
+    if (BenchmarkConfig::getInstance().getIsReplicated()) {
+      TThread::enable_multiverison();
+    }else{
+      TThread::disable_multiversion();
+    }
 #endif
     TThread::set_shard_index(BenchmarkConfig::getInstance().getShardIndex());
     TThread::set_nshards(BenchmarkConfig::getInstance().getNshards());
