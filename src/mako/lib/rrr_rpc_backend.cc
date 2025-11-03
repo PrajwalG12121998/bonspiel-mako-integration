@@ -1,0 +1,616 @@
+// -*- mode: c++; c-file-style: "k&r"; c-basic-offset: 4 -*-
+/***********************************************************************
+ *
+ * rrr_rpc_backend.cc:
+ *   rrr/rpc transport backend implementation
+ *
+ **********************************************************************/
+
+#include "rrr_rpc_backend.h"
+#include "lib/assert.h"
+#include "lib/common.h"
+#include "lib/message.h"
+#include "lib/helper_queue.h"
+#include "thread.h"
+#include "benchmarks/sto/sync_util.hh"
+
+#include <chrono>
+#include <thread>
+#include <cstring>
+
+using namespace mako;
+
+// External callbacks registered by bench.cc and dbtest.cc
+extern std::function<int(int,int)> bench_callback_;
+extern std::function<int(int,int)> dbtest_callback_;
+
+// Constructor
+RrrRpcBackend::RrrRpcBackend(const transport::Configuration& config,
+                             int shard_idx,
+                             uint16_t id,
+                             const std::string& cluster)
+    : config_(config),
+      shard_idx_(shard_idx),
+      id_(id),
+      cluster_(cluster) {
+
+    cluster_role_ = convertCluster(cluster);
+}
+
+// Destructor
+RrrRpcBackend::~RrrRpcBackend() {
+    Shutdown();
+}
+
+// Initialize the backend
+int RrrRpcBackend::Initialize(const std::string& local_uri,
+                              uint8_t numa_node,
+                              uint8_t phy_port,
+                              uint8_t st_nr_req_types,
+                              uint8_t end_nr_req_types) {
+
+    // Create PollThreadWorker for event-driven I/O
+    poll_thread_worker_ = rrr::PollThreadWorker::create();
+
+    // Extract host and port from local_uri (format: "host:port")
+    size_t colon_pos = local_uri.find(':');
+    if (colon_pos == std::string::npos) {
+        Panic("Invalid local_uri format: %s (expected host:port)", local_uri.c_str());
+        return -1;
+    }
+
+    std::string port_str = local_uri.substr(colon_pos + 1);
+
+    // Create server to listen for incoming requests
+    server_ = new rrr::Server(poll_thread_worker_);
+
+    // Register request handlers for all request types
+    // Note: We capture both req_type and 'this' in the lambda
+    for (uint8_t req_type = st_nr_req_types; req_type <= end_nr_req_types; req_type++) {
+        server_->reg(req_type, [this, req_type](rusty::Box<rrr::Request> req, std::weak_ptr<rrr::ServerConnection> weak_sconn) {
+            RequestHandler(req_type, std::move(req), weak_sconn, this);
+        });
+    }
+
+    // Start listening on the port
+    int ret = server_->start(("0.0.0.0:" + port_str).c_str());
+    if (ret != 0) {
+        Panic("Failed to start rrr::Server on port %s", port_str.c_str());
+        return ret;
+    }
+
+    Notice("RrrRpcBackend initialized on %s (listening on 0.0.0.0:%s)",
+           local_uri.c_str(), port_str.c_str());
+
+    return 0;
+}
+
+// Shutdown
+void RrrRpcBackend::Shutdown() {
+    Stop();
+
+    // Close all client connections
+    clients_lock_.lock();
+    for (auto& pair : clients_) {
+        if (pair.second) {
+            pair.second->close();
+        }
+    }
+    clients_.clear();
+    clients_lock_.unlock();
+
+    // Shutdown server
+    if (server_) {
+        delete server_;
+        server_ = nullptr;
+    }
+
+    // Shutdown poll thread worker
+    // Note: PollThreadWorker shuts down automatically when Arc goes out of scope
+    if (poll_thread_worker_) {
+        poll_thread_worker_ = rusty::Arc<rrr::PollThreadWorker>();
+    }
+}
+
+// Allocate request buffer
+char* RrrRpcBackend::AllocRequestBuffer(size_t req_len, size_t resp_len) {
+    // Allocate buffer for request data
+    request_buffer_.resize(req_len);
+    current_resp_len_ = resp_len;
+
+    return request_buffer_.data();
+}
+
+// Free request buffer
+void RrrRpcBackend::FreeRequestBuffer() {
+    // rrr/rpc manages its own buffers, but we clear ours
+    request_buffer_.clear();
+    current_resp_len_ = 0;
+}
+
+// Get or create client connection to a shard
+std::shared_ptr<rrr::Client> RrrRpcBackend::GetOrCreateClient(uint8_t shard_idx,
+                                                               uint16_t server_id,
+                                                               int force_center) {
+    int clusterRoleSentTo = cluster_role_;
+
+    // Handle shard failure scenarios (same logic as eRPC)
+    auto session_key = std::make_tuple(LOCALHOST_CENTER_INT, shard_idx, server_id);
+
+    if (sync_util::sync_logger::failed_shard_index >= 0) {
+        if (cluster_role_ == LEARNER_CENTER_INT)
+            clusterRoleSentTo = LOCALHOST_CENTER_INT;
+
+        if (cluster_role_ == LOCALHOST_CENTER_INT) {
+            if (shard_idx == sync_util::sync_logger::failed_shard_index) {
+                session_key = std::make_tuple(LEARNER_CENTER_INT, shard_idx, server_id);
+                clusterRoleSentTo = LEARNER_CENTER_INT;
+            }
+        }
+    }
+
+    if (force_center >= 0) {
+        session_key = std::make_tuple(force_center, shard_idx, server_id);
+        clusterRoleSentTo = force_center;
+    }
+
+    // Check if client already exists
+    clients_lock_.lock();
+    auto it = clients_.find(session_key);
+    if (it != clients_.end()) {
+        clients_lock_.unlock();
+        Debug("GetOrCreateClient: Reusing existing client for shard %d, server %d", shard_idx, server_id);
+        return it->second;
+    }
+
+    // Create new client
+    Debug("GetOrCreateClient: Creating new client for shard %d, server %d", shard_idx, server_id);
+
+    std::shared_ptr<rrr::Client> client = rrr::Client::create(poll_thread_worker_);
+
+    // Connect to destination
+    int port = std::atoi(config_.shard(shard_idx, clusterRoleSentTo).port.c_str()) + server_id;
+    std::string addr = config_.shard(shard_idx, clusterRoleSentTo).host + ":" + std::to_string(port);
+
+    Debug("GetOrCreateClient: Connecting to %s", addr.c_str());
+
+    int ret = client->connect(addr.c_str());
+    if (ret != 0) {
+        Warning("Failed to connect to %s (error %d)", addr.c_str(), ret);
+        clients_lock_.unlock();
+        return nullptr;
+    }
+
+    // Store client
+    clients_[session_key] = client;
+    clients_lock_.unlock();
+
+    Debug("Created rrr::Client connection to %s", addr.c_str());
+    return client;
+}
+
+// Send request to single shard
+bool RrrRpcBackend::SendToShard(TransportReceiver* src,
+                                uint8_t req_type,
+                                uint8_t shard_idx,
+                                uint16_t server_id,
+                                size_t msg_len) {
+    Debug("RrrRpcBackend::SendToShard: req_type=%d, shard_idx=%d, server_id=%d, msg_len=%zu",
+          req_type, shard_idx, server_id, msg_len);
+
+    if (shard_idx >= config_.nshards) {
+        Warning("Invalid shardIdx:%d, nshards:%d", shard_idx, config_.nshards);
+        return false;
+    }
+
+    std::shared_ptr<rrr::Client> client = GetOrCreateClient(shard_idx, server_id);
+    if (!client) {
+        Warning("Failed to get client for shard %d, server %d", shard_idx, server_id);
+        return false;
+    }
+
+    Debug("RrrRpcBackend::SendToShard: Got client, calling begin_request");
+
+    // Begin request with rrr/rpc
+    rrr::Future* fu = client->begin_request(req_type);
+    if (!fu) {
+        Warning("Failed to begin_request for req_type %d", req_type);
+        return false;
+    }
+
+    Debug("RrrRpcBackend::SendToShard: begin_request succeeded, writing request data");
+
+    // Write request data using client's << operator
+    rrr::Marshal m;
+    m.write(request_buffer_.data(), msg_len);
+    *client << m;
+
+    msg_size_req_sent_ += msg_len;
+    msg_counter_req_sent_ += 1;
+
+    Debug("RrrRpcBackend::SendToShard: Calling end_request to send RPC");
+
+    // Send request
+    client->end_request();
+
+    Debug("RrrRpcBackend::SendToShard: Waiting for response");
+
+    // Wait for response
+    fu->wait();
+
+    if (fu->get_error_code() != 0) {
+        Warning("RPC error: %d", fu->get_error_code());
+        rrr::Future::safe_release(fu);
+        return false;
+    }
+
+    // Read response
+    rrr::Marshal& resp_marshal = fu->get_reply();
+    std::vector<char> resp_buffer(current_resp_len_);
+    resp_marshal.read(resp_buffer.data(), current_resp_len_);
+
+    // Deliver response to receiver
+    src->ReceiveResponse(req_type, resp_buffer.data());
+
+    rrr::Future::safe_release(fu);
+    return true;
+}
+
+// Send request to multiple shards
+bool RrrRpcBackend::SendToAll(TransportReceiver* src,
+                              uint8_t req_type,
+                              int shards_bit_set,
+                              uint16_t server_id,
+                              size_t resp_len,
+                              size_t req_len,
+                              int force_center) {
+    Debug("RrrRpcBackend::SendToAll: req_type=%d, shards_bit_set=%d, server_id=%d, req_len=%zu",
+          req_type, shards_bit_set, server_id, req_len);
+
+    if (!shards_bit_set) return true;
+
+    // Prepare futures for all shards
+    std::vector<rrr::Future*> futures;
+
+    for (int shard_idx = 0; shard_idx < config_.nshards; shard_idx++) {
+        if ((shards_bit_set >> shard_idx) % 2 == 0) continue;
+
+        Debug("RrrRpcBackend::SendToAll: Sending to shard %d", shard_idx);
+
+        std::shared_ptr<rrr::Client> client = GetOrCreateClient(shard_idx, server_id, force_center);
+        if (!client) {
+            Warning("Failed to get client for shard %d", shard_idx);
+            continue;
+        }
+
+        Debug("RrrRpcBackend::SendToAll: Got client for shard %d, calling begin_request", shard_idx);
+
+        rrr::Future* fu = client->begin_request(req_type);
+        if (!fu) {
+            Warning("Failed to begin_request for shard %d", shard_idx);
+            continue;
+        }
+
+        // Write request data using client's << operator
+        rrr::Marshal m;
+        m.write(request_buffer_.data(), req_len);
+        *client << m;
+
+        msg_size_req_sent_ += req_len;
+        msg_counter_req_sent_ += 1;
+
+        Debug("RrrRpcBackend::SendToAll: Calling end_request for shard %d", shard_idx);
+
+        client->end_request();
+        futures.push_back(fu);
+    }
+
+    Debug("RrrRpcBackend::SendToAll: Sent to %zu shards, waiting for responses", futures.size());
+
+    // Wait for all responses
+    for (rrr::Future* fu : futures) {
+        fu->wait();
+
+        if (fu->get_error_code() != 0) {
+            Warning("RPC error: %d", fu->get_error_code());
+            rrr::Future::safe_release(fu);
+            continue;
+        }
+
+        // Read response
+        rrr::Marshal& resp_marshal = fu->get_reply();
+        std::vector<char> resp_buffer(resp_len);
+        resp_marshal.read(resp_buffer.data(), resp_len);
+
+        // Deliver response
+        src->ReceiveResponse(req_type, resp_buffer.data());
+
+        rrr::Future::safe_release(fu);
+    }
+
+    return true;
+}
+
+// Send batch request to multiple shards
+bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
+                                   uint8_t req_type,
+                                   uint16_t server_id,
+                                   size_t resp_len,
+                                   const std::map<int, std::pair<char*, size_t>>& data) {
+    std::vector<rrr::Future*> futures;
+
+    for (auto& entry : data) {
+        int shard_idx = entry.first;
+        char* raw_data = entry.second.first;
+        size_t req_len = entry.second.second;
+
+        std::shared_ptr<rrr::Client> client = GetOrCreateClient(shard_idx, server_id);
+        if (!client) continue;
+
+        rrr::Future* fu = client->begin_request(req_type);
+        if (!fu) continue;
+
+        // Write request data using client's << operator
+        rrr::Marshal m;
+        m.write(raw_data, req_len);
+        *client << m;
+
+        msg_size_req_sent_ += req_len;
+        msg_counter_req_sent_ += 1;
+
+        client->end_request();
+        futures.push_back(fu);
+    }
+
+    // Wait for all responses
+    for (rrr::Future* fu : futures) {
+        fu->wait();
+
+        if (fu->get_error_code() != 0) {
+            Warning("RPC error: %d", fu->get_error_code());
+            rrr::Future::safe_release(fu);
+            continue;
+        }
+
+        // Read response
+        rrr::Marshal& resp_marshal = fu->get_reply();
+        std::vector<char> resp_buffer(resp_len);
+        resp_marshal.read(resp_buffer.data(), resp_len);
+
+        src->ReceiveResponse(req_type, resp_buffer.data());
+
+        rrr::Future::safe_release(fu);
+    }
+
+    return true;
+}
+
+// Run event loop
+void RrrRpcBackend::RunEventLoop() {
+    // The PollThreadWorker runs its own thread for network I/O
+    // Here we process responses from helper threads and send them back
+    while (!stop_) {
+        // Process responses from all helper queues
+        for (auto& it : queue_holders_response_) {
+            auto server_id = it.first;
+            auto* server_queue = it.second;
+
+            erpc::ReqHandle* req_handle_ptr;
+            size_t msg_size = 0;
+
+            // Fetch responses from helper thread queue
+            while (!server_queue->is_req_buffer_empty()) {
+                server_queue->fetch_one_req(&req_handle_ptr, msg_size);
+
+                // Cast back to void* key and lookup RrrRequestHandle
+                void* key = reinterpret_cast<void*>(req_handle_ptr);
+
+                rrr_request_map_lock_.lock();
+                auto map_it = rrr_request_map_.find(key);
+                if (map_it == rrr_request_map_.end()) {
+                    rrr_request_map_lock_.unlock();
+                    Warning("RrrRequestHandle not found for key %p", key);
+                    continue;
+                }
+
+                // Move ownership out of map
+                std::unique_ptr<RrrRequestHandle> rrr_handle = std::move(map_it->second);
+                rrr_request_map_.erase(map_it);
+                rrr_request_map_lock_.unlock();
+
+                // Send response back via rrr/rpc
+                rrr_handle->sconn->begin_reply(*rrr_handle->original_request);
+                rrr::Marshal m;
+                m.write(rrr_handle->response_data.data(), msg_size);
+                *rrr_handle->sconn << m;
+                rrr_handle->sconn->end_reply();
+
+                msg_size_resp_sent_ += msg_size;
+                msg_counter_resp_sent_ += 1;
+            }
+        }
+
+        // Small sleep to avoid busy-waiting
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+}
+
+// Stop event loop
+void RrrRpcBackend::Stop() {
+    stop_ = true;
+
+    Notice("RrrRpcBackend stats: msg_size_resp_sent: %d bytes, counter: %d, avg: %lf",
+           msg_size_resp_sent_, msg_counter_resp_sent_,
+           msg_size_resp_sent_ / (msg_counter_resp_sent_ + 0.0));
+}
+
+// Print statistics
+void RrrRpcBackend::PrintStats() {
+    Notice("RrrRpcBackend request stats: msg_size_req_sent: %d bytes, counter: %d, avg: %lf",
+           msg_size_req_sent_, msg_counter_req_sent_,
+           msg_size_req_sent_ / (msg_counter_req_sent_ + 0.0));
+}
+
+// Static request handler for rrr::Server
+void RrrRpcBackend::RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> req, std::weak_ptr<rrr::ServerConnection> weak_sconn, RrrRpcBackend* backend) {
+    if (!backend) {
+        Warning("RequestHandler called with null backend pointer!");
+        return;
+    }
+
+    // Lock the weak_ptr to get shared_ptr
+    auto sconn = weak_sconn.lock();
+    if (!sconn) {
+        Warning("ServerConnection closed before handling request");
+        return;
+    }
+
+    // Handle special request types
+    if (req_type == watermarkReqType) {
+        Debug("Received watermarkReqType");
+
+        // Read request
+        basic_request_t basic_req;
+        req->m.read(&basic_req, sizeof(basic_req));
+
+        // Prepare response
+        get_int_response_t resp;
+        resp.result = sync_util::sync_logger::retrieveShardW();
+        resp.req_nr = basic_req.req_nr;
+        resp.status = ErrorCode::SUCCESS;
+        resp.shard_index = TThread::get_shard_index();
+
+        // Send response
+        sconn->begin_reply(*req);
+        rrr::Marshal m;
+        m.write(&resp, sizeof(resp));
+        *sconn << m;
+        sconn->end_reply();
+
+        backend->msg_size_resp_sent_ += sizeof(resp);
+        backend->msg_counter_resp_sent_ += 1;
+        return;
+    }
+
+    if (req_type == warmupReqType) {
+        Debug("Received warmupReqType");
+
+        warmup_request_t warmup_req;
+        req->m.read(&warmup_req, sizeof(warmup_req));
+
+        get_int_response_t resp;
+        resp.result = 1;
+        resp.req_nr = warmup_req.req_nr;
+        resp.status = ErrorCode::SUCCESS;
+        resp.shard_index = TThread::get_shard_index();
+
+        sconn->begin_reply(*req);
+        rrr::Marshal m;
+        m.write(&resp, sizeof(resp));
+        *sconn << m;
+        sconn->end_reply();
+
+        backend->msg_size_resp_sent_ += sizeof(resp);
+        backend->msg_counter_resp_sent_ += 1;
+        return;
+    }
+
+    if (req_type == controlReqType) {
+        control_request_t ctrl_req;
+        req->m.read(&ctrl_req, sizeof(ctrl_req));
+
+        Warning("Received controlReqType, control: %d, shardIndex: %lld, target_server_id: %llu",
+                ctrl_req.control, ctrl_req.value, ctrl_req.targert_server_id);
+
+        bool is_datacenter_failure = ctrl_req.targert_server_id == 10000;
+
+        if (is_datacenter_failure) {
+            if (dbtest_callback_)
+                dbtest_callback_(ctrl_req.control, ctrl_req.value);
+        } else {
+            if (bench_callback_)
+                bench_callback_(ctrl_req.control, ctrl_req.value);
+        }
+
+        get_int_response_t resp;
+        resp.result = 0;
+        resp.req_nr = ctrl_req.req_nr;
+        resp.status = ErrorCode::SUCCESS;
+        resp.shard_index = TThread::get_shard_index();
+
+        sconn->begin_reply(*req);
+        rrr::Marshal m;
+        m.write(&resp, sizeof(resp));
+        *sconn << m;
+        sconn->end_reply();
+
+        backend->msg_size_resp_sent_ += sizeof(resp);
+        backend->msg_counter_resp_sent_ += 1;
+        return;
+    }
+
+    // Normal requests: enqueue to helper queue
+    // Extract request size first to determine server ID before creating RrrRequestHandle
+    size_t req_size = req->m.content_size();
+    if (req_size < sizeof(TargetServerIDReader)) {
+        Warning("Request too small to contain server ID: %zu < %zu", req_size, sizeof(TargetServerIDReader));
+        return;
+    }
+
+    // Peek at request data to extract server ID
+    std::vector<char> temp_buffer(req_size);
+    req->m.read(temp_buffer.data(), req_size);
+    auto* target_server_id_reader = (TargetServerIDReader*)temp_buffer.data();
+    uint16_t target_server_id = target_server_id_reader->targert_server_id;
+
+    // Create RrrRequestHandle with backend and server_id
+    auto rrr_handle = std::make_unique<RrrRequestHandle>(std::move(req), sconn, req_type, backend, target_server_id);
+
+    // Store the already-extracted request data
+    rrr_handle->request_data = std::move(temp_buffer);
+
+    // Find the appropriate helper queue
+    auto it = backend->queue_holders_.find(target_server_id);
+    if (it == backend->queue_holders_.end()) {
+        Warning("No helper queue found for server_id %d (available queues: %zu)",
+                target_server_id, backend->queue_holders_.size());
+        // Print all available queue IDs
+        for (auto& q : backend->queue_holders_) {
+            Warning("  Available queue for server_id: %d", q.first);
+        }
+        return;
+    }
+    auto* helper_queue = it->second;
+
+    // Allocate response buffer (helper thread will fill this)
+    rrr_handle->response_data.resize(8192);  // Max response size
+
+    // Store in map and get pointer to use as key
+    void* key = rrr_handle.get();
+    backend->rrr_request_map_lock_.lock();
+    backend->rrr_request_map_[key] = std::move(rrr_handle);
+    backend->rrr_request_map_lock_.unlock();
+
+    // Enqueue to helper queue (cast void* to erpc::ReqHandle* for compatibility)
+    helper_queue->add_one_req(reinterpret_cast<erpc::ReqHandle*>(key), 0);
+}
+
+// RrrRequestHandle::EnqueueResponse - enqueues response to response queue
+void RrrRequestHandle::EnqueueResponse(size_t msg_size) {
+    if (!backend) {
+        Warning("RrrRequestHandle::EnqueueResponse: backend is null!");
+        return;
+    }
+
+    // Find the response queue for this server
+    auto it = backend->GetHelperQueuesResponse().find(server_id);
+    if (it == backend->GetHelperQueuesResponse().end()) {
+        Warning("RrrRequestHandle::EnqueueResponse: No response queue found for server_id %d", server_id);
+        return;
+    }
+
+    auto* response_queue = it->second;
+
+    // Enqueue response (using GetOpaqueHandle as the key, same as for requests)
+    response_queue->add_one_req(reinterpret_cast<erpc::ReqHandle*>(GetOpaqueHandle()), msg_size);
+}

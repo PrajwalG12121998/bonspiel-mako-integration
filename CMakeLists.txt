@@ -469,6 +469,8 @@ set(MAKO_SRCFILES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/helper_queue.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/transport.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/fasttransport.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/erpc_backend.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/rrr_rpc_backend.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/configuration.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/timestamp.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mako/lib/promise.cc"
@@ -664,7 +666,9 @@ target_include_directories(mako PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/mako"
     "${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/rrr"
     "${HOME}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third-party/rusty-cpp/include"
 )
 target_compile_options(mako PUBLIC ${BENCH_CXXFLAGS})
 target_compile_definitions(mako PUBLIC CONFIG_H=\"${CONFIG_H}\")

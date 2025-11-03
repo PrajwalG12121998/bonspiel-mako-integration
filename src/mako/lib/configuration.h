@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <map>
 #include "common.h"
+#include "transport_backend.h"
 
 using std::string;
 
@@ -83,11 +84,46 @@ namespace transport
         int warehouses;         // number of warehouses per shard
         std::string configFile; // yaml file
         std::unordered_map<int,int> mports;
-        
+
         // New format support
         bool is_new_format;
         std::map<string, SiteInfo> sites_map;
         std::vector<std::vector<string>> shard_map;
+
+        // Transport configuration
+        mako::TransportType transport_type;
+
+        /**
+         * Load transport configuration from environment or YAML
+         * Priority: environment variable > YAML config > default (rrr/rpc)
+         */
+        void LoadTransportConfig(YAML::Node* config = nullptr) {
+            // Default to rrr/rpc
+            transport_type = mako::TransportType::RRR_RPC;
+
+            // Check environment variable first (highest priority)
+            const char* env_transport = std::getenv("MAKO_TRANSPORT");
+            if (env_transport) {
+                try {
+                    transport_type = mako::ParseTransportType(env_transport);
+                    return;  // Environment variable takes precedence
+                } catch (const std::exception& e) {
+                    // Invalid value, fall through to YAML or default
+                }
+            }
+
+            // Check YAML config if provided
+            if (config && (*config)["transport"]) {
+                try {
+                    std::string transport_str = (*config)["transport"].as<std::string>();
+                    transport_type = mako::ParseTransportType(transport_str);
+                } catch (const std::exception& e) {
+                    // Invalid YAML value, use default
+                }
+            }
+
+            // Otherwise use default (RRR_RPC)
+        }
         
     private:
         std::vector<ShardAddress> shards;  // Old format

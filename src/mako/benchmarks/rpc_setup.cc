@@ -99,16 +99,23 @@ void erpc_server(
     running_shardIndex,
     id);
 
+  // Set up helper queues for this server transport
+  std::unordered_map<uint16_t, mako::HelperQueue*> local_queue_holders;
+  std::unordered_map<uint16_t, mako::HelperQueue*> local_queue_holders_response;
+
   for (int i = 0; i < (int)NumWarehousesTotal(); i++) {
     if (i / (int)NumWarehouses() == running_shardIndex)
       continue;
     if (i % (int)BenchmarkConfig::getInstance().getNumErpcServer() == alpha) {
       auto *it = new mako::HelperQueue(i, true);
-      server_transports[alpha]->c->queue_holders[i] = it;
+      local_queue_holders[i] = it;
       auto *it_res = new mako::HelperQueue(i, false);
-      server_transports[alpha]->c->queue_holders_response[i] = it_res;
+      local_queue_holders_response[i] = it_res;
     }
   }
+
+  server_transports[alpha]->SetHelperQueues(local_queue_holders);
+  server_transports[alpha]->SetHelperQueuesResponse(local_queue_holders_response);
   set_server_transport.fetch_add(1);
   server_transports[alpha]->Run();
   Notice("the erpc_server is terminated on shardIdx:%d, alpha:%d!", running_shardIndex, alpha);
@@ -223,8 +230,8 @@ void mako::setup_erpc_server()
     if (i / (int)NumWarehouses() == (int)cfg.getShardIndex())
       continue;
     auto idx = i % (int)cfg.getNumErpcServer();
-    queue_holders[i] = server_transports[idx]->c->queue_holders[i];
-    queue_holders_response[i] = server_transports[idx]->c->queue_holders_response[i];
+    queue_holders[i] = server_transports[idx]->GetHelperQueue(i);
+    queue_holders_response[i] = server_transports[idx]->GetHelperQueueResponse(i);
   }
 }
 
