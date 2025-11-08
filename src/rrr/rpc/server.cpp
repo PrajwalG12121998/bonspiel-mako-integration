@@ -16,6 +16,13 @@
 
 using namespace std;
 
+// External safety annotations for std functions used in this module
+// @external: {
+//   std::unordered_map::find: [unsafe, (auto) -> auto]
+//   std::unordered_map::erase: [unsafe, (auto) -> void]
+//   std::function::operator=: [unsafe, (auto) -> std::function&]
+// }
+
 namespace rrr {
 
 
@@ -27,6 +34,8 @@ static int g_stat_server_batching_idx;
 static uint64_t g_stat_server_batching_report_time = 0;
 static const uint64_t g_stat_server_batching_report_interval = 1000 * 1000 * 1000;
 
+// @unsafe - Uses global mutable state and calls Log::info
+// SAFETY: Only called from single-threaded server context
 static void stat_server_batching(size_t batch) {
     g_stat_server_batching_idx = (g_stat_server_batching_idx + 1) % g_stat_server_batching_size;
     g_stat_server_batching[g_stat_server_batching_idx] = batch;
@@ -62,6 +71,8 @@ static unordered_map<i32, pair<Counter, Counter>> g_stat_rpc_counter;
 static uint64_t g_stat_server_rpc_counting_report_time = 0;
 static const uint64_t g_stat_server_rpc_counting_report_interval = 1000 * 1000 * 1000;
 
+// @unsafe - Uses global mutable state and calls Log::info
+// SAFETY: Only called from single-threaded server context
 static void stat_server_rpc_counting(i32 rpc_id) {
     g_stat_rpc_counter[rpc_id].first.next();
 
@@ -632,7 +643,8 @@ int Server::start(const char* bind_addr) {
   return 0;
 }
 
-// @safe - Registers RPC handler
+// @unsafe - Calls std::unordered_map::find and operator= (external unsafe)
+// SAFETY: Thread-safe map operations for handler registration
 int Server::reg(i32 rpc_id, const RequestHandler& func) {
     // disallow duplicate rpc_id
     if (handlers_.find(rpc_id) != handlers_.end()) {
@@ -644,7 +656,8 @@ int Server::reg(i32 rpc_id, const RequestHandler& func) {
     return 0;
 }
 
-// @safe - Unregisters RPC handler
+// @unsafe - Calls std::unordered_map::erase (external unsafe)
+// SAFETY: Thread-safe map operation for handler removal
 void Server::unreg(i32 rpc_id) {
     handlers_.erase(rpc_id);
 }

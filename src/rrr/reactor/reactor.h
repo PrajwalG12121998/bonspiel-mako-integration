@@ -79,7 +79,8 @@ class Reactor {
   }
   friend Event;
 
-  // @safe - Creates shared_ptr event with perfect forwarding
+  // @unsafe - Creates shared_ptr event with perfect forwarding
+  // SAFETY: Stores sp_ev in all_events_ list, ensuring lifetime
   template <typename Ev, typename... Args>
   static shared_ptr<Ev> CreateSpEvent(Args&&... args) {
     auto sp_ev = make_shared<Ev>(args...);
@@ -90,7 +91,8 @@ class Reactor {
     return sp_ev;
   }
 
-  // @safe - Creates event and returns reference
+  // @unsafe - Creates event and returns reference to shared_ptr content
+  // SAFETY: Returned reference is safe because shared_ptr is stored in all_events_ list
   template <typename Ev, typename... Args>
   static Ev& CreateEvent(Args&&... args) {
     return *CreateSpEvent<Ev>(args...);

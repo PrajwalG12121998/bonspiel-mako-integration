@@ -12,7 +12,7 @@
 #include "basetypes.hpp"
 #include "misc.hpp"
 
-// External safety annotations for pthread functions used in this module
+// External safety annotations for pthread and std functions used in this module
 // @external: {
 //   pthread_spin_init: [unsafe, (pthread_spinlock_t*, int) -> int]
 //   pthread_spin_lock: [unsafe, (pthread_spinlock_t*) -> int]
@@ -31,7 +31,14 @@
 //   pthread_create: [unsafe, (pthread_t*, const pthread_attr_t*, void*(*)(void*), void*) -> int]
 //   pthread_join: [unsafe, (pthread_t, void**) -> int]
 //   pthread_exit: [unsafe, (void*) -> void]
-//   nanosleep: [safe, (const struct timespec*, struct timespec*) -> int]
+//   pthread_mutexattr_init: [unsafe, (pthread_mutexattr_t*) -> int]
+//   pthread_mutexattr_settype: [unsafe, (pthread_mutexattr_t*, int) -> int]
+//   pthread_mutexattr_destroy: [unsafe, (pthread_mutexattr_t*) -> int]
+//   std::atomic::store: [unsafe, (bool, std::memory_order) -> void]
+//   std::atomic::load: [unsafe, (std::memory_order) -> bool]
+//   std::__atomic_base::store: [unsafe, (int, std::memory_order) -> void]
+//   std::__atomic_base::load: [unsafe, (std::memory_order) -> int]
+//   nanosleep: [unsafe, (const struct timespec*, struct timespec*) -> int]
 // }
 
 #define Pthread_spin_init(l, pshared) verify(pthread_spin_init(l, (pshared)) == 0)
@@ -71,7 +78,8 @@ public:
     // SAFETY: Only takes address of stack-allocated timespec which remains valid
     void lock();
     
-    // @safe - Releases lock atomically
+    // @unsafe - Calls std::atomic::store (external unsafe)
+    // SAFETY: Thread-safe atomic store operation
     void unlock() {
         locked_.store(false, std::memory_order_release);
     }
@@ -92,10 +100,11 @@ public:
     // @safe - Default destructor
     ~SpinCondVar() = default;
 
-    // @safe - Wait on condition, releasing and reacquiring lock
+    // @unsafe - Calls std::atomic::store/load (external unsafe)
+    // SAFETY: Thread-safe atomic operations, proper lock/unlock ordering
     void wait(SpinLock& sl) {
         flag_.store(0, std::memory_order_relaxed);
-        sl.unlock(); 
+        sl.unlock();
 
         while(flag_.load(std::memory_order_acquire) == 0) {
             Time::sleep(10);
@@ -103,11 +112,12 @@ public:
         sl.lock();
     }
 
-    // @safe - Timed wait with timeout
+    // @unsafe - Calls std::atomic::store/load (external unsafe)
+    // SAFETY: Thread-safe atomic operations, proper lock/unlock ordering
     void timed_wait(SpinLock& sl, double sec) {
         flag_.store(0, std::memory_order_relaxed);
-        sl.unlock(); 
-        
+        sl.unlock();
+
         Timer t;
         t.start();
         while(flag_.load(std::memory_order_acquire) == 0) {
@@ -119,12 +129,14 @@ public:
         sl.lock();
     }
 
-    // @safe - Signal one waiter
+    // @unsafe - Calls std::atomic::store (external unsafe)
+    // SAFETY: Thread-safe atomic store operation
     void signal() {
         flag_.store(1, std::memory_order_release);
     }
 
-    // @safe - Broadcast to all waiters
+    // @unsafe - Calls std::atomic::store (external unsafe)
+    // SAFETY: Thread-safe atomic store operation
     void bcast() {
         flag_.store(1, std::memory_order_release);
     }
@@ -271,6 +283,7 @@ public:
     }
 
     // @unsafe - Thread-safe try_pop with mutex protection
+    // SAFETY: Returns via output parameter
     bool try_pop(T* t) {
         bool ret = false;
         Pthread_mutex_lock(&m_);
@@ -284,6 +297,7 @@ public:
     }
 
     // @unsafe - Thread-safe try_pop with ignore value
+    // SAFETY: Returns via output parameter
     bool try_pop_but_ignore(T* t, const T& ignore) {
         bool ret = false;
         Pthread_mutex_lock(&m_);
@@ -297,15 +311,16 @@ public:
     }
 
     // @unsafe - Thread-safe blocking pop
+    // SAFETY: Returns by value (copy/move), not by reference. Borrow checker false positive.
     T pop() {
         Pthread_mutex_lock(&m_);
         while (q_->empty()) {
             Pthread_cond_wait(&not_empty_, &m_);
         }
-        T e = q_->front();
+        auto result = std::move(q_->front());
         q_->pop_front();
         Pthread_mutex_unlock(&m_);
-        return e;
+        return result;
     }
 };
 

@@ -58,6 +58,7 @@ struct Request {
 class Service {
 public:
     virtual ~Service() {}
+    // @safe - Virtual method for service registration
     virtual int __reg_to__(Server*) = 0;
 };
 

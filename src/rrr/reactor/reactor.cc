@@ -16,7 +16,8 @@ namespace rrr {
 thread_local std::shared_ptr<Reactor> Reactor::sp_reactor_th_{};
 thread_local std::shared_ptr<Coroutine> Reactor::sp_running_coro_th_{};
 
-// @safe - Returns current thread-local coroutine
+// @unsafe - Calls std::shared_ptr constructor (undeclared)
+// SAFETY: Returns copy of thread-local shared_ptr - thread-safe
 std::shared_ptr<Coroutine> Coroutine::CurrentCoroutine() {
   // TODO re-enable this verify
 //  verify(sp_running_coro_th_);

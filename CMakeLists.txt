@@ -785,8 +785,8 @@ if(NOT TARGET rrr)
     
     # Add borrow checking for RRR library
     if(ENABLE_BORROW_CHECKING)
-        # add_borrow_check_target(rrr)
-        
+        add_borrow_check_target(rrr)
+
         # Create a convenience target to check only RRR library files
         add_custom_target(borrow_check_rrr
             DEPENDS borrow_check_all_rrr

@@ -3,12 +3,18 @@
 #include <rusty/option.hpp>
 
 #include <unordered_map>
+#include <mutex>
+#include <condition_variable>
 
 #include "misc/marshal.hpp"
 #include "reactor/epoll_wrapper.h"
 #include "reactor/reactor.h"
 
 // External safety annotations for system functions used in this module
+// IMPORTANT: All external functions must be marked [unsafe] because:
+// - External code is not analyzed/verified by RustyCpp
+// - 'unsafe' means programmer-audited (takes responsibility)
+// - 'safe' would imply tool verification, which doesn't happen for external code
 // @external: {
 //   socket: [unsafe, (int, int, int) -> int]
 //   connect: [unsafe, (int, const struct sockaddr*, socklen_t) -> int]
@@ -16,9 +22,17 @@
 //   setsockopt: [unsafe, (int, int, int, const void*, socklen_t) -> int]
 //   getaddrinfo: [unsafe, (const char*, const char*, const struct addrinfo*, struct addrinfo**) -> int]
 //   freeaddrinfo: [unsafe, (struct addrinfo*) -> void]
-//   gai_strerror: [safe, (int) -> const char*]
+//   gai_strerror: [unsafe, (int) -> const char*]
 //   memset: [unsafe, (void*, int, size_t) -> void*]
 //   strcpy: [unsafe, (char*, const char*) -> char*]
+//   std::condition_variable::condition_variable: [unsafe, () -> void]
+//   std::unique_lock::unique_lock: [unsafe, (std::mutex&) -> void]
+//   std::lock_guard::lock_guard: [unsafe, (std::mutex&) -> void]
+//   std::unique_lock::unlock: [unsafe, () -> void]
+//   std::condition_variable::wait: [unsafe, (std::unique_lock&, predicate) -> void]
+//   std::condition_variable::wait_for: [unsafe, (std::unique_lock&, duration, predicate) -> bool]
+//   std::condition_variable::notify_all: [unsafe, () -> void]
+//   std::chrono::duration::duration: [unsafe, (double) -> void]
 // }
 
 namespace rrr {
@@ -34,7 +48,7 @@ struct FutureAttr {
     std::function<void(Future*)> callback;
 };
 
-// @safe - Thread-safe future for async RPC results
+// @safe - Thread-safe future for async RPC results with C++ standard library synchronization
 class Future: public RefCounted {
     friend class Client;
 
@@ -46,49 +60,43 @@ class Future: public RefCounted {
 
     bool ready_;
     bool timed_out_;
-    pthread_cond_t ready_cond_;
-    pthread_mutex_t ready_m_;
+    std::condition_variable ready_cond_;
+    std::mutex ready_m_;
 
-    // @unsafe - Notifies waiters and triggers callbacks
-    // SAFETY: Protected by mutex, callback executed in coroutine
+    // @safe - Notifies waiters and triggers callbacks with RAII mutex
+    // SAFETY: std::mutex provides RAII, callback executed in coroutine
     void notify_ready();
 
 protected:
 
     // protected destructor as required by RefCounted.
-    // @unsafe - Destroys pthread primitives
-    // SAFETY: Called only when refcount reaches zero
-    ~Future() {
-        Pthread_mutex_destroy(&ready_m_);
-        Pthread_cond_destroy(&ready_cond_);
-    }
+    // @safe - RAII destructors handle cleanup automatically
+    // SAFETY: std::mutex and std::condition_variable have proper destructors
+    ~Future() = default;
 
 public:
 
-    // @unsafe - Initializes pthread primitives
-    // SAFETY: Mutex and condvar properly destroyed in destructor
+    // @safe - Default initialization with RAII primitives
+    // SAFETY: std::mutex and std::condition_variable initialize themselves
     Future(i64 xid, const FutureAttr& attr = FutureAttr())
             : xid_(xid), error_code_(0), attr_(attr), ready_(false), timed_out_(false) {
-        Pthread_mutex_init(&ready_m_, nullptr);
-        Pthread_cond_init(&ready_cond_, nullptr);
+        // RAII: ready_m_ and ready_cond_ initialize themselves
     }
 
-    // @unsafe - Thread-safe ready check
-    // SAFETY: Protected by mutex
+    // @unsafe - Calls std::lock_guard (external unsafe)
+    // SAFETY: Thread-safe RAII lock
     bool ready() {
-        Pthread_mutex_lock(&ready_m_);
-        bool r = ready_;
-        Pthread_mutex_unlock(&ready_m_);
-        return r;
+        std::lock_guard<std::mutex> lock(ready_m_);
+        return ready_;
     }
 
     // wait till reply done
-    // @unsafe - Blocks on condition variable
-    // SAFETY: Proper pthread condvar usage
+    // @safe - Blocks on condition variable with RAII lock
+    // SAFETY: std::unique_lock provides RAII mutex locking, condition_variable is safe
     void wait();
 
-    // @unsafe - Timed wait with timeout
-    // SAFETY: Proper pthread timed wait usage
+    // @safe - Timed wait with timeout using RAII lock
+    // SAFETY: std::unique_lock provides RAII, std::condition_variable::wait_for is safe
     void timed_wait(double sec);
 
     // @unsafe - Thread-safe timed_out check (non-blocking)

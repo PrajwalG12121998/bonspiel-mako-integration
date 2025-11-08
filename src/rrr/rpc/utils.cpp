@@ -18,7 +18,8 @@ using namespace std;
 
 namespace rrr {
 
-// @safe - Uses safe fcntl operations
+// @unsafe - Calls fcntl (external unsafe)
+// SAFETY: fcntl is POSIX-compliant, fd must be valid
 int set_nonblocking(int fd, bool nonblocking) {
     int ret = fcntl(fd, F_GETFL, 0);
     if (ret != -1) {

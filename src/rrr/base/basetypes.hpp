@@ -57,6 +57,7 @@ public:
     void set(i32 v) {
         val_ = v;
     }
+    // @safe - Simple const getter
     i32 get() const {
         return val_;
     }
@@ -69,10 +70,12 @@ public:
 class v64 {
     i64 val_;
 public:
+    // @safe - Simple value initialization
     v64(i64 v = 0): val_(v) { }
     void set(i64 v) {
         val_ = v;
     }
+    // @safe - Simple const getter
     i64 get() const {
         return val_;
     }
@@ -113,11 +116,13 @@ protected:
     virtual ~RefCounted() = 0;
 public:
     RefCounted(): refcnt_(1) {}
-    // @safe - Atomic read of reference count
+    // @unsafe - Calls std::atomic::load (external unsafe function)
+    // SAFETY: Atomic read of reference count, thread-safe
     int ref_count() const {
         return refcnt_.load(std::memory_order_relaxed);
     }
-    // @safe - Atomic increment of reference count
+    // @unsafe - Calls std::atomic::fetch_add (external unsafe function)
+    // SAFETY: Atomic increment of reference count, thread-safe
     RefCounted* ref_copy() {
         refcnt_.fetch_add(1, std::memory_order_acq_rel);
         return this;
@@ -135,32 +140,38 @@ public:
 };
 inline RefCounted::~RefCounted() {}
 
-// @safe
+// @unsafe - All methods call external unsafe atomic operations
+// SAFETY: Thread-safe atomic counter
 class Counter: public NoCopy {
     std::atomic<i64> next_;
 public:
-    // @safe
+    // @safe - Constructor doesn't call external functions
     Counter(i64 start = 0) : next_(start) { }
-    // @safe
+    // @unsafe - Calls std::atomic::load (external unsafe)
+    // SAFETY: Atomic read, thread-safe
     i64 peek_next() const {
         return next_.load(std::memory_order_relaxed);
     }
-    // @safe
+    // @unsafe - Calls std::atomic::fetch_add (external unsafe)
+    // SAFETY: Atomic increment, thread-safe
     i64 next(i64 step = 1) {
         return next_.fetch_add(step, std::memory_order_acq_rel);
     }
-    // @safe
+    // @unsafe - Calls std::atomic::store (external unsafe)
+    // SAFETY: Atomic write, thread-safe
     void reset(i64 start = 0) {
         next_.store(start, std::memory_order_relaxed);
     }
 };
 
-// @safe - Time utilities using system calls marked as safe in external annotations
+// @unsafe - Time utilities using external unsafe system calls
+// SAFETY: clock_gettime and select are POSIX-compliant system calls
 class Time {
 public:
     static const uint64_t RRR_USEC_PER_SEC = 1000000;
 
-    // @safe - Uses clock_gettime which is marked safe in external annotations
+    // @unsafe - Calls clock_gettime (external unsafe)
+    // SAFETY: Properly initializes timespec struct, POSIX-compliant
     static uint64_t now(bool accurate = false) {
       struct timespec spec;
 #ifdef __APPLE__
@@ -175,7 +186,8 @@ public:
       return spec.tv_sec * RRR_USEC_PER_SEC + spec.tv_nsec/1000;
     }
 
-    // @safe - Uses select which is marked safe in external annotations
+    // @unsafe - Calls select and uses address-of operator (external unsafe)
+    // SAFETY: Properly initializes timeval struct, POSIX-compliant
     static void sleep(uint64_t t) {
         struct timeval tv;
         tv.tv_usec = t % RRR_USEC_PER_SEC;
@@ -202,21 +214,25 @@ private:
     struct timeval end_;
 };
 
-// @safe - Thread-local random number generator
+// @unsafe - Thread-local random number generator calling external unsafe functions
+// SAFETY: Uses std::mt19937 which is thread-safe per instance
 class Rand: public NoCopy {
     std::mt19937 rand_;
 public:
-    // @safe - Seeds using current time and thread ID
+    // @safe - Constructor seeds the generator
     Rand();
-    // @safe - Returns next random number
+    // @unsafe - Calls std::mt19937::operator() (external unsafe)
+    // SAFETY: Thread-safe, each instance is independent
     std::mt19937::result_type next() {
         return rand_();
     }
-    // @safe - Returns random number in range [lower, upper)
+    // @unsafe - Calls std::mt19937::operator() (external unsafe)
+    // SAFETY: Thread-safe, each instance is independent
     std::mt19937::result_type next(int lower, int upper) {
         return lower + rand_() % (upper - lower);
     }
-    // @safe - Operator() for STL compatibility
+    // @unsafe - Calls std::mt19937::operator() (external unsafe)
+    // SAFETY: Thread-safe, each instance is independent
     std::mt19937::result_type operator() () {
         return rand_();
     }

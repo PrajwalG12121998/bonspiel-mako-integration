@@ -1,5 +1,8 @@
 #include <string>
 #include <memory>
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 #include <errno.h>
 #include <string.h>
@@ -15,68 +18,65 @@
 
 using namespace std;
 
+// External safety annotations for std functions used in this module
+// @external: {
+//   std::unique_lock::unique_lock: [unsafe, (std::mutex&) -> std::unique_lock<std::mutex>]
+//   std::lock_guard::lock_guard: [unsafe, (std::mutex&) -> std::lock_guard<std::mutex>]
+//   std::condition_variable::wait: [unsafe, (std::unique_lock<std::mutex>&, auto) -> void]
+// }
+
 namespace rrr {
 
-// @unsafe - Blocks on condition variable until ready
-// SAFETY: Proper pthread mutex/condvar usage
+// @unsafe - Calls std::unique_lock and std::condition_variable::wait (external unsafe)
+// SAFETY: Thread-safe RAII lock and wait operations
 void Future::wait() {
-  Pthread_mutex_lock(&ready_m_);
-  while (!ready_ && !timed_out_) {
-    Pthread_cond_wait(&ready_cond_, &ready_m_);
-  }
-  Pthread_mutex_unlock(&ready_m_);
+  std::unique_lock<std::mutex> lock(ready_m_);
+  ready_cond_.wait(lock, [this]() { return ready_ || timed_out_; });
 }
 
-// @unsafe - Waits with timeout using pthread_cond_timedwait
-// SAFETY: Proper timeout calculation and pthread usage
+// @unsafe - Calls std::unique_lock (external unsafe)
+// SAFETY: Thread-safe RAII lock and wait_for operations
 void Future::timed_wait(double sec) {
-  Pthread_mutex_lock(&ready_m_);
-  while (!ready_ && !timed_out_) {
-    int full_sec = (int) sec;
-    int nsec = int((sec - full_sec) * 1000 * 1000 * 1000);
-    struct timeval tv;
-    gettimeofday(&tv, nullptr);
-    timespec abstime;
-    abstime.tv_sec = tv.tv_sec + full_sec;
-    abstime.tv_nsec = tv.tv_usec * 1000 + nsec;
-    if (abstime.tv_nsec > 1000 * 1000 * 1000) {
-      abstime.tv_nsec -= 1000 * 1000 * 1000;
-      abstime.tv_sec += 1;
-    }
-    // Log::debug("wait for %lf", sec);  // Commented out - causes abort due to nullptr file
-    int ret = pthread_cond_timedwait(&ready_cond_, &ready_m_, &abstime);
-    if (ret == ETIMEDOUT) {
-      timed_out_ = true;
-    } else {
-      verify(ret == 0);
-    }
-  }
-  Pthread_mutex_unlock(&ready_m_);
-  if (timed_out_) {
+  std::unique_lock<std::mutex> lock(ready_m_);
+
+  auto duration = std::chrono::duration<double>(sec);
+  bool success = ready_cond_.wait_for(lock, duration, [this]() {
+    return ready_ || timed_out_;
+  });
+
+  if (!success && !ready_) {
+    timed_out_ = true;
     error_code_ = ETIMEDOUT;
-    if (attr_.callback != nullptr) {
-      attr_.callback(this);
-    }
+  }
+
+  // Release lock before calling callback
+  lock.unlock();
+
+  if (timed_out_ && attr_.callback != nullptr) {
+    attr_.callback(this);
   }
 }
 
-// @unsafe - Notifies waiters and triggers callback in coroutine
-// SAFETY: Protected by mutex, callback executed asynchronously
+// @unsafe - Calls std::lock_guard (external unsafe)
+// SAFETY: Thread-safe RAII lock and notify operations
 void Future::notify_ready() {
-  Pthread_mutex_lock(&ready_m_);
-  if (!timed_out_) {
-    ready_ = true;
+  bool should_callback = false;
+  {
+    std::lock_guard<std::mutex> lock(ready_m_);
+    if (!timed_out_) {
+      ready_ = true;
+    }
+    should_callback = ready_;
+    // Use notify_all to wake up ALL waiting threads
+    ready_cond_.notify_all();
   }
-  // Use broadcast instead of signal to wake up ALL waiting threads
-  Pthread_cond_broadcast(&ready_cond_);
-  Pthread_mutex_unlock(&ready_m_);
-  if (ready_ && attr_.callback != nullptr) {
+  // Execute callback outside lock to avoid deadlock
+  if (should_callback && attr_.callback != nullptr) {
     // Warning: make sure memory is safe!
     auto x = attr_.callback;
     Coroutine::CreateRun([x, this]() {
       x(this);
     });
-//        attr_.callback(this);
   }
 }
 

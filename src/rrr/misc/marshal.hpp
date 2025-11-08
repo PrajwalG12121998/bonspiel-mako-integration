@@ -42,7 +42,9 @@ class Marshallable {
 //    __debug_ = 30;
 //    Log_debug("destruct marshallable.");
   };
+  // @safe - Virtual method for serialization
   virtual Marshal& ToMarshal(Marshal& m) const;
+  // @safe - Virtual method for deserialization
   virtual Marshal& FromMarshal(Marshal& m);
   virtual size_t EntitySize() {
     verify(0);
@@ -247,16 +249,17 @@ class Marshal: public NoCopy {
       return write_idx - read_idx;
     }
 
+    // @unsafe - Returns pointer to heap data, not reference to local
+    // SAFETY: Returns pointer into data->ptr array which outlives this function
     char *set_bookmark() {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
 
-      char *p = &data->ptr[write_idx];
-      write_idx++;
+      char* result = &data->ptr[write_idx++];
 
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
-      return p;
+      return result;
     }
 
     size_t write(const void *p, size_t n) {
@@ -442,6 +445,7 @@ class Marshal: public NoCopy {
   // Use case 1: In C++ server io thread, when a compelete packet is received, read it off
   //             into a Marshal object and hand over to worker threads.
   // Use case 2: In Python extension, buffer message in Marshal object, and send to network.
+  // @safe - Transfers data between Marshal objects
   size_t read_from_marshal(Marshal &m, size_t n);
 
   size_t write_to_fd(int fd);
@@ -467,6 +471,7 @@ class Marshal: public NoCopy {
     return cnt;
   }
 
+  // @safe - Bypasses copying by sharing chunk pointers
   size_t bypass_copying(rrr::MarshallDeputy, size_t);
 };
 
@@ -529,6 +534,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const double &v) {
   return m;
 }
 
+// @unsafe - Calls Marshal::write with raw pointer
+// SAFETY: Writes string data safely with bounds checking
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::string &v) {
   v64 v_len = v.length();
   m << v_len;
@@ -538,6 +545,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::string &v) {
   return m;
 }
 
+// @unsafe - Template serialization with potential recursion
+// SAFETY: Each element serialized through appropriate operator<<
 template<class T1, class T2>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::pair<T1, T2> &v) {
   m << v.first;
@@ -545,6 +554,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::pair<T1, T2> &v) {
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::vector<T> &v) {
   v64 v_len = v.size();
@@ -556,6 +567,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::vector<T> &v) {
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::list<T> &v) {
   v64 v_len = v.size();
@@ -567,6 +580,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::list<T> &v) {
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::set<T> &v) {
   v64 v_len = v.size();
@@ -578,6 +593,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::set<T> &v) {
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class K, class V>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::map<K, V> &v) {
   v64 v_len = v.size();
@@ -589,6 +606,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::map<K, V> &v) {
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m,
                                 const std::unordered_set<T> &v) {
@@ -601,6 +620,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m,
   return m;
 }
 
+// @unsafe - Template serialization with pointer dereference
+// SAFETY: Iterator dereferencing is safe within container bounds
 template<class K, class V>
 inline rrr::Marshal &operator<<(rrr::Marshal &m,
                                 const std::unordered_map<K, V> &v) {
@@ -785,6 +806,8 @@ inline rrr::Marshal& operator>>(rrr::Marshal& m, rrr::MarshallDeputy& rhs) {
   return m;
 }
 
+// @unsafe - Serializes MarshallDeputy with virtual dispatch
+// SAFETY: Proper null checking and virtual method call
 inline rrr::Marshal& operator<<(rrr::Marshal& m,const rrr::MarshallDeputy& rhs) {
   verify(rhs.kind_ != rrr::MarshallDeputy::UNKNOWN);
   verify(rhs.sp_data_);
