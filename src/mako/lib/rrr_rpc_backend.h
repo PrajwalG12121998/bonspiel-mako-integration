@@ -187,6 +187,7 @@ private:
 
     // Runtime state
     std::atomic<bool> stop_{false};
+    std::atomic<bool> event_loop_running_{false};
 
     // Helper queues for server-side processing
     std::unordered_map<uint16_t, mako::HelperQueue*> queue_holders_;

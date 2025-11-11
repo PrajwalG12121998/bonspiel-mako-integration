@@ -462,6 +462,8 @@ void RrrRpcBackend::RunEventLoop() {
     // Here we process responses from helper threads and send them back
     Notice("RrrRpcBackend::RunEventLoop: Starting event loop");
 
+    event_loop_running_.store(true, std::memory_order_release);
+
     while (!stop_) {
         // Process responses from all helper queues
         for (auto& it : queue_holders_response_) {
@@ -524,6 +526,9 @@ void RrrRpcBackend::RunEventLoop() {
     }
 
     Notice("RrrRpcBackend::RunEventLoop: Stop flag detected, exiting event loop");
+
+    event_loop_running_.store(false, std::memory_order_release);
+
     Notice("RrrRpcBackend::RunEventLoop: Exited cleanly");
 }
 
@@ -538,10 +543,25 @@ void RrrRpcBackend::Stop() {
 
     Notice("RrrRpcBackend::Stop: BEGIN - Setting stop flag");
 
-    // Give event loop time to detect stop flag and exit gracefully
-    // The event loop checks stop_ flag frequently and will exit
+    // Wait for event loop to actually exit (poll with timeout)
     Notice("RrrRpcBackend::Stop: Waiting for event loop to exit...");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    auto start_time = std::chrono::steady_clock::now();
+    while (event_loop_running_.load(std::memory_order_acquire)) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+
+        if (elapsed > 5000) {
+            Warning("RrrRpcBackend::Stop: Event loop did not exit within 5 second timeout!");
+            break;
+        }
+
+        // Small sleep to avoid busy-polling
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (!event_loop_running_.load(std::memory_order_acquire)) {
+        Notice("RrrRpcBackend::Stop: Event loop exited successfully");
+    }
 
     // Signal all helper queues to stop (both request and response queues)
     Notice("RrrRpcBackend::Stop: Signaling %zu request queues to stop", queue_holders_.size());
@@ -563,9 +583,17 @@ void RrrRpcBackend::Stop() {
     // Shutdown server to stop accepting new connections (BEFORE closing clients)
     if (server_) {
         Notice("RrrRpcBackend::Stop: Deleting server (to stop new connections)");
-        delete server_;
-        server_ = nullptr;
-        Notice("RrrRpcBackend::Stop: Server deleted");
+        try {
+            delete server_;
+            server_ = nullptr;
+            Notice("RrrRpcBackend::Stop: Server deleted");
+        } catch (const std::exception& e) {
+            Warning("RrrRpcBackend::Stop: Exception during server deletion: %s", e.what());
+            server_ = nullptr;
+        } catch (...) {
+            Warning("RrrRpcBackend::Stop: Unknown exception during server deletion");
+            server_ = nullptr;
+        }
     } else {
         Notice("RrrRpcBackend::Stop: No server to delete");
     }
@@ -585,7 +613,15 @@ void RrrRpcBackend::Stop() {
     }
 
     for (auto& client : clients_to_close) {
-        client->close();
+        try {
+            if (client) {
+                client->close();
+            }
+        } catch (const std::exception& e) {
+            Warning("RrrRpcBackend::Stop: Exception closing client: %s", e.what());
+        } catch (...) {
+            Warning("RrrRpcBackend::Stop: Unknown exception closing client");
+        }
     }
     Notice("RrrRpcBackend::Stop: Closed %zu client connections", clients_to_close.size());
 
