@@ -148,6 +148,20 @@ run_2shard_replication() {
     [ $test_result -eq 0 ] && [ $hanging_check -eq 0 ]
 }
 
+run_2shard_replication_erpc() {
+    cleanup_processes
+    # Run test and capture exit code (set +e to prevent immediate exit)
+    set +e
+    MAKO_TRANSPORT=erpc bash ./examples/test_2shard_replication.sh
+    local test_result=$?
+    set -e
+    # Always check for hanging processes, even if test failed
+    check_for_hanging_processes "shard2ReplicationErpc"
+    local hanging_check=$?
+    # Return failure if either check failed
+    [ $test_result -eq 0 ] && [ $hanging_check -eq 0 ]
+}
+
 run_1shard_replication_simple() {
     cleanup_processes
     # Run test and capture exit code (set +e to prevent immediate exit)
@@ -242,6 +256,9 @@ case "${1:-}" in
         ;;
     shard2Replication)
         run_2shard_replication
+        ;;
+    shard2ReplicationErpc)
+        run_2shard_replication_erpc
         ;;
     shard1ReplicationSimple)
         run_1shard_replication_simple
