@@ -48,9 +48,12 @@ jobs:
       - name: Run tests - simple replication
         run: ./ci/ci.sh simplePaxos 
 
-      - name: Run tests - simple 2 shards without replication 
+      - name: Run tests - simple 2 shards without replication (RRR)
         run: ./ci/ci.sh shardNoReplication
-      
+
+      - name: Run tests - simple 2 shards without replication (eRPC)
+        run: ./ci/ci.sh shardNoReplicationErpc
+
       - name: Run tests - simple 1 shard with replication - dbtest
         run: ./ci/ci.sh shard1Replication
 

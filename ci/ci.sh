@@ -96,7 +96,7 @@ run_simple_paxos() {
     [ $test_result -eq 0 ] && [ $hanging_check -eq 0 ]
 }
 
-# Function 4: Run 2-shard no replication test
+# Function 4: Run 2-shard no replication test (RRR transport)
 run_2shard_no_replication() {
     cleanup_processes
     set +e
@@ -104,6 +104,18 @@ run_2shard_no_replication() {
     local test_result=$?
     set -e
     check_for_hanging_processes "shardNoReplication"
+    local hanging_check=$?
+    [ $test_result -eq 0 ] && [ $hanging_check -eq 0 ]
+}
+
+# Function 4b: Run 2-shard no replication test with eRPC transport
+run_2shard_no_replication_erpc() {
+    cleanup_processes
+    set +e
+    MAKO_TRANSPORT=erpc bash ./examples/test_2shard_no_replication.sh
+    local test_result=$?
+    set -e
+    check_for_hanging_processes "shardNoReplicationErpc"
     local hanging_check=$?
     [ $test_result -eq 0 ] && [ $hanging_check -eq 0 ]
 }
@@ -221,6 +233,9 @@ case "${1:-}" in
         ;;
     shardNoReplication)
         run_2shard_no_replication
+        ;;
+    shardNoReplicationErpc)
+        run_2shard_no_replication_erpc
         ;;
     shard1Replication)
         run_1shard_replication

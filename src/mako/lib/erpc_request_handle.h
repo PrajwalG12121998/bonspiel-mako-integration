@@ -43,7 +43,9 @@ public:
     }
 
     void* GetOpaqueHandle() override {
-        return static_cast<void*>(handle_);
+        // Return the wrapper pointer (this), NOT the underlying eRPC handle
+        // This must match the key we stored in the map during RequestHandler
+        return static_cast<void*>(this);
     }
 
     void EnqueueResponse(size_t msg_size) override;  // Implemented in erpc_backend.cc

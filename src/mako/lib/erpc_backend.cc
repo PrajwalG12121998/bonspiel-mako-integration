@@ -32,6 +32,10 @@ void ErpcBackend::ResponseHandler(void *_context, void *_tag) {
     auto *c = static_cast<AppContext *>(_context);
     auto *rt = reinterpret_cast<req_tag_t *>(_tag);
 
+    // Debug: ResponseHandler received response
+    // Notice("[eRPC] ResponseHandler: received response for req_type=%d, resp_size=%zu",
+    //        rt->reqType, rt->resp_msgbuf.get_data_size());
+
     rt->src->ReceiveResponse(rt->reqType,
                              reinterpret_cast<char *>(rt->resp_msgbuf.buf_));
 
@@ -123,6 +127,11 @@ void ErpcBackend::RequestHandler(erpc::ReqHandle *req_handle, void *_context) {
     auto *target_server_id_reader = (TargetServerIDReader *)req_handle->get_req_msgbuf()->buf_;
     uint16_t target_server_id = target_server_id_reader->targert_server_id;
     auto *helper_queue = c->queue_holders[target_server_id];
+
+    // Debug: RequestHandler received request
+    // Notice("[eRPC] RequestHandler: received request req_type=%d, target_server_id=%d, req_size=%zu, helper_queue=%p",
+    //        req_handle->get_req_msgbuf()->get_req_type(), target_server_id,
+    //        req_handle->get_req_msgbuf()->get_data_size(), (void*)helper_queue);
 
     // Create ErpcRequestHandle wrapper with backend and server_id for transport-agnostic processing
     auto wrapper = std::make_unique<mako::ErpcRequestHandle>(req_handle, c->backend, target_server_id);
@@ -221,21 +230,46 @@ int ErpcBackend::Initialize(const std::string& local_uri,
 
 // Shutdown
 void ErpcBackend::Shutdown() {
+    Notice("[SHUTDOWN] ErpcBackend::Shutdown starting");
     Stop();
+    Notice("[SHUTDOWN] Stop() completed");
 
     if (context_) {
+        Notice("[SHUTDOWN] Cleaning up context, rpc=%p", (void*)context_->rpc);
+
+        // Check if there are pending wrappers in the map
+        {
+            std::lock_guard<std::mutex> lock(context_->erpc_request_map_lock);
+            size_t pending_count = context_->erpc_request_map.size();
+            if (pending_count > 0) {
+                Warning("[SHUTDOWN] WARNING: %zu pending request wrappers in map during shutdown!",
+                        pending_count);
+                // Clear the map to prevent use-after-free
+                context_->erpc_request_map.clear();
+            }
+        }
+        Notice("[SHUTDOWN] Wrapper map cleared");
+
         if (context_->rpc) {
+            Notice("[SHUTDOWN] About to delete eRPC Rpc object");
             delete context_->rpc;
             context_->rpc = nullptr;
+            Notice("[SHUTDOWN] eRPC Rpc object deleted");
         }
+
+        Notice("[SHUTDOWN] About to delete context");
         delete context_;
         context_ = nullptr;
+        Notice("[SHUTDOWN] Context deleted");
     }
 
     if (nexus_) {
+        Notice("[SHUTDOWN] About to delete nexus");
         delete nexus_;
         nexus_ = nullptr;
+        Notice("[SHUTDOWN] Nexus deleted");
     }
+    Notice("[SHUTDOWN] ErpcBackend::Shutdown completed");
 }
 
 // Allocate request buffer
@@ -337,6 +371,13 @@ bool ErpcBackend::SendToShard(TransportReceiver* src,
         ASSERT(shard_idx < config_.nshards);
     }
 
+    // Debug: Track remote requests
+    // int my_shard = TThread::get_shard_index();
+    // if (shard_idx != my_shard) {
+    //     Notice("[eRPC] SendToShard: remote request from shard %d to shard %d, req_type=%d, session_id=%d, msg_len=%zu",
+    //            my_shard, shard_idx, req_type, GetSession(src, shard_idx, server_id), msg_len);
+    // }
+
     int session_id = GetSession(src, shard_idx, server_id);
 
     context_->client.crt_req_tag->src = src;
@@ -344,6 +385,10 @@ bool ErpcBackend::SendToShard(TransportReceiver* src,
     context_->msg_size_req_sent += msg_len;
     context_->msg_counter_req_sent += 1;
     context_->rpc->resize_msg_buffer(&context_->client.crt_req_tag->req_msgbuf, msg_len);
+
+    // Debug: Track request enqueueing
+    // Notice("[eRPC] SendToShard: enqueuing request, session_id=%d, req_type=%d, msg_len=%zu, buffer_size=%zu",
+    //        session_id, req_type, msg_len, context_->client.crt_req_tag->req_msgbuf.get_data_size());
 
     context_->rpc->enqueue_request(session_id,
                             req_type,
@@ -534,6 +579,11 @@ void ErpcBackend::RunEventLoop() {
                 context_->msg_size_resp_sent += msg_size;
                 context_->msg_counter_resp_sent += 1;
                 context_->rpc->resize_msg_buffer(&resp, msg_size);
+
+                // Debug: Track response sending
+                // Notice("[eRPC] RunEventLoop: sending response, req_type=%d, server_id=%d, msg_size=%zu",
+                //        req_handle->get_req_msgbuf()->get_req_type(), server_id, msg_size);
+
                 context_->rpc->enqueue_response(req_handle, &resp);
 
                 // Wrapper is automatically deleted when it goes out of scope

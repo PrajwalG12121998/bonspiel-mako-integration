@@ -104,15 +104,19 @@ namespace transport
         void LoadTransportConfig(YAML::Node* config = nullptr) {
             // Default to rrr/rpc
             transport_type = mako::TransportType::RRR_RPC;
+            const char* env_transport = std::getenv("MAKO_TRANSPORT");
 
             // Check environment variable first (highest priority)
-            const char* env_transport = std::getenv("MAKO_TRANSPORT");
             if (env_transport) {
                 try {
                     transport_type = mako::ParseTransportType(env_transport);
+                    std::cout << "[TRANSPORT] Configured via MAKO_TRANSPORT=" << env_transport
+                              << ": using " << mako::TransportTypeToString(transport_type) << std::endl;
                     return;  // Environment variable takes precedence
                 } catch (const std::exception& e) {
                     // Invalid value, fall through to YAML or default
+                    std::cout << "[TRANSPORT] WARNING: Invalid MAKO_TRANSPORT value '" << env_transport
+                              << "', falling back to default" << std::endl;
                 }
             }
 
@@ -121,12 +125,16 @@ namespace transport
                 try {
                     std::string transport_str = (*config)["transport"].as<std::string>();
                     transport_type = mako::ParseTransportType(transport_str);
+                    std::cout << "[TRANSPORT] Configured via YAML: using "
+                              << mako::TransportTypeToString(transport_type) << std::endl;
+                    return;
                 } catch (const std::exception& e) {
                     // Invalid YAML value, use default
                 }
             }
 
             // Otherwise use default (RRR_RPC)
+            std::cout << "[TRANSPORT] Using default: " << mako::TransportTypeToString(transport_type) << std::endl;
         }
         
     private:

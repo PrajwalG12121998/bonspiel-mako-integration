@@ -15,17 +15,21 @@ rm -f nfs_sync_*
 trd=${1:-6}
 script_name="$(basename "$0")"
 
+# Determine transport type and create unique log prefix
+transport="${MAKO_TRANSPORT:-rrr}"
+log_prefix="${script_name}_${transport}"
+
 ps aux | grep -i dbtest | awk "{print \$2}" | xargs kill -9 2>/dev/null
 sleep 1
 # Start shard 0 in background
 echo "Starting shard 0..."
-nohup bash bash/shard.sh 2 0 $trd localhost > ${script_name}_shard0-$trd.log 2>&1 &
+nohup bash bash/shard.sh 2 0 $trd localhost > ${log_prefix}_shard0-$trd.log 2>&1 &
 SHARD0_PID=$!
 sleep 2
 
 # Start shard 1 in background
 echo "Starting shard 1..."
-nohup bash bash/shard.sh 2 1 $trd localhost > ${script_name}_shard1-$trd.log 2>&1 &
+nohup bash bash/shard.sh 2 1 $trd localhost > ${log_prefix}_shard1-$trd.log 2>&1 &
 SHARD1_PID=$!
 
 # Wait for experiments to run
@@ -46,7 +50,7 @@ failed=0
 
 # Check each shard's output
 for i in 0 1; do
-    log="${script_name}_shard${i}-$trd.log"
+    log="${log_prefix}_shard${i}-$trd.log"
     echo ""
     echo "Checking $log:"
     echo "-----------------"
@@ -104,7 +108,7 @@ else
     echo "========================================="
     echo ""
     echo "Debug information:"
-    echo "Check ${script_name}_shard*-$trd for details"
-    tail -10 ${script_name}_shard0-$trd.log ${script_name}_shard1-$trd.log
+    echo "Check ${log_prefix}_shard*-$trd for details"
+    tail -10 ${log_prefix}_shard0-$trd.log ${log_prefix}_shard1-$trd.log
     exit 1
 fi
