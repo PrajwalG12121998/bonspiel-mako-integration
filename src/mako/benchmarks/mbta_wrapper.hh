@@ -131,8 +131,6 @@ public:
   bool shard_get(lcdf::Str key, std::string &value, size_t max_bytes_read) {
     STD_OP({
       bool ret = mbta.transGet(key, value);
-
-      if (value.length() >= mako::EXTRA_BITS_FOR_VALUE) value.resize(value.length() - mako::EXTRA_BITS_FOR_VALUE);;
       return ret;
     });
   }
@@ -144,9 +142,7 @@ public:
     mbta_type::Str end = end_key ? mbta_type::Str(*end_key) : mbta_type::Str();
 
     STD_OP(mbta.transQuery(start_key, end, [&] (mbta_type::Str key, std::string& value) {
-
-      if (value.length() >= mako::EXTRA_BITS_FOR_VALUE) value.resize(value.length() - mako::EXTRA_BITS_FOR_VALUE);;
-      return callback.invoke(key.data(), key.length(), value);
+    return callback.invoke(key.data(), key.length(), value);
     }, arena));
     return true;
   }

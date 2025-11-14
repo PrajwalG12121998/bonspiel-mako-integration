@@ -55,7 +55,7 @@ SHARD1_P1_PID=$!
 
 # Wait for experiments to run
 echo "Running experiments for 30 seconds..."
-sleep 60
+sleep 70
 
 # Kill the processes - FORCE KILL ALL
 echo "Stopping shards..."

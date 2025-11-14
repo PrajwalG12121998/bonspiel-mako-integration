@@ -499,6 +499,16 @@ int main(int argc, char **argv) {
         run_tests(db);
     }
 
+    {
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+        auto records = scan_tables(db, table);
+        printf("\n=== Database contents (%zu rows) ===\n", records.size());
+        for (const auto &entry : records) {
+            printf("%s => %s\n", entry.first.c_str(), entry.second.c_str());
+        }
+        fflush(stdout);
+    }
+
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // Cleanup: stop helper and eRPC server threads before closing DB
