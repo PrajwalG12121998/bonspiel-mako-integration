@@ -103,7 +103,7 @@ fi
 # Verify RocksDB files were created
 echo ""
 echo "8. Verifying RocksDB persistence files..."
-USERNAME=${USER:-unknown}
+USERNAME=$(whoami)
 if ls /tmp/${USERNAME}_test_rocksdb*/CURRENT > /dev/null 2>&1 || ls /tmp/${USERNAME}_rocksdb_ordered*/CURRENT > /dev/null 2>&1; then
     echo "   ✓ RocksDB database files created successfully"
     echo "   Database locations:"
