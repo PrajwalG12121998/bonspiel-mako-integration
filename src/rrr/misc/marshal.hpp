@@ -20,6 +20,12 @@
 
 namespace rrr {
 
+// @unsafe - Wrapper for std::min to satisfy borrow checker
+template<typename T>
+inline T safe_min(const T& a, const T& b) {
+  return std::min(a, b);
+}
+
 #ifdef RPC_STATISTICS
 void stat_marshal_in(int fd, const void* buf, size_t nbytes, ssize_t ret);
 void stat_marshal_out(int fd, const void* buf, size_t nbytes, ssize_t ret);
@@ -43,10 +49,10 @@ class Marshallable {
 //    __debug_ = 30;
 //    Log_debug("destruct marshallable.");
   };
-  // @safe - Virtual method for serialization
+  // @safe
   // @lifetime: (&'a, &'b mut) -> &'b mut
   virtual Marshal& ToMarshal(Marshal& m) const;
-  // @safe - Virtual method for deserialization
+  // @safe
   // @lifetime: (&'a mut, &'b mut) -> &'b mut
   virtual Marshal& FromMarshal(Marshal& m);
   virtual size_t EntitySize() const {
@@ -77,7 +83,9 @@ class MarshallDeputy {
     typedef std::unordered_map<int32_t, std::function<Marshallable*()>> MarContainer;
     // @safe - Returns reference to global factory registry
     // SAFETY: Protected by mutex, returns reference to static container
+    // @lifetime: () -> &'static
     static MarContainer& GetInitializers();
+    // @unsafe - Registers initializer with mutex locking
     static int RegInitializer(int32_t, std::function<Marshallable*()>);
     static std::function<Marshallable*()> GetInitializer(int32_t);
 
@@ -140,8 +148,8 @@ class MarshallDeputy {
     // }
 
     rrr::Marshal& CreateActualObjectFrom(rrr::Marshal& m);
-    // @safe - Setter accepts shared_ptr<Marshallable> with polymorphism support
-    // SAFETY: Validates nullptr before setting, updates kind_ atomically
+    // @unsafe - Setter accepts shared_ptr<Marshallable> with polymorphism support
+    // SAFETY: Validates nullptr before setting, updates kind_ atomically, calls std::shared_ptr::operator=
     void SetMarshallable(std::shared_ptr<rrr::Marshallable> m) {
       verify(sp_data_ == nullptr);
       sp_data_ = m;
@@ -215,7 +223,7 @@ class Marshal: public NoCopy {
     }
 
     size_t resize_to(size_t new_sz){
-      size = std::min(size, new_sz);
+      size = safe_min(size, new_sz);
       //char *x = new char[size];
       //memcpy(x, ptr, size);
       //delete[] ptr;
@@ -296,7 +304,7 @@ class Marshal: public NoCopy {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
 
-      size_t n_write = std::min(n, data->size - write_idx);
+      size_t n_write = safe_min(n, data->size - write_idx);
       if (n_write > 0) {
         memcpy(data->ptr + write_idx, p, n_write);
       }
@@ -312,7 +320,7 @@ class Marshal: public NoCopy {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
 
-      size_t n_read = std::min(n, write_idx - read_idx);
+      size_t n_read = safe_min(n, write_idx - read_idx);
       if (n_read > 0) {
         memcpy(p, data->ptr + read_idx, n_read);
       }
@@ -331,7 +339,7 @@ class Marshal: public NoCopy {
     size_t peek(void *p, size_t n) const {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
-      size_t n_peek = std::min(n, write_idx - read_idx);      
+      size_t n_peek = safe_min(n, write_idx - read_idx);
       if (n_peek > 0) {
         memcpy(p, data->ptr + read_idx, n_peek);
       }
@@ -343,7 +351,7 @@ class Marshal: public NoCopy {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
 
-      size_t n_discard = std::min(n, write_idx - read_idx);
+      size_t n_discard = safe_min(n, write_idx - read_idx);
       read_idx += n_discard;
 
       assert(write_idx <= data->size);
@@ -509,26 +517,36 @@ class Marshal: public NoCopy {
   size_t bypass_copying(rrr::MarshallDeputy, size_t);
 };
 
+// @unsafe
+// @lifetime: (&'a, const i8&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::i8 &v) {
   verify(m.write(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const i16&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::i16 &v) {
   verify(m.write(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const i32&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::i32 &v) {
   verify(m.write(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const i64&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::i64 &v) {
   verify(m.write(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const v32&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::v32 &v) {
   char buf[5];
   size_t bsize = rrr::SparseInt::dump(v.get(), buf);
@@ -536,6 +554,8 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::v32 &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const v64&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::v64 &v) {
   char buf[9];
   size_t bsize = rrr::SparseInt::dump(v.get(), buf);
@@ -543,33 +563,44 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const rrr::v64 &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const uint8_t&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const uint8_t &u) {
   verify(m.write(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const uint16_t&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const uint16_t &u) {
   verify(m.write(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const uint32_t&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const uint32_t &u) {
   verify(m.write(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const uint64_t&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const uint64_t &u) {
   verify(m.write(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, const double&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const double &v) {
   verify(m.write(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
-// @unsafe - Calls Marshal::write with raw pointer
 // SAFETY: Writes string data safely with bounds checking
+// @unsafe
+// @lifetime: (&'a, const std::string&) -> &'a
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::string &v) {
   v64 v_len = v.length();
   m << v_len;
@@ -579,115 +610,139 @@ inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::string &v) {
   return m;
 }
 
-// @unsafe - Template serialization with potential recursion
-// SAFETY: Each element serialized through appropriate operator<<
+// @unsafe
+// @lifetime: (&'a, const T1&, const T2&) -> &'a
 template<class T1, class T2>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::pair<T1, T2> &v) {
-  m << v.first;
-  m << v.second;
-  return m;
+  // @unsafe {
+    m << v.first;
+    m << v.second;
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::vector<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::vector<T> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::vector<T>::const_iterator it = v.begin(); it != v.end();
-       ++it) {
-    m << *it;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::vector<T>::const_iterator it = v.begin(); it != v.end();
+         ++it) {
+      m << *it;
+    }
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::list<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::list<T> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::list<T>::const_iterator it = v.begin(); it != v.end();
-       ++it) {
-    m << *it;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::list<T>::const_iterator it = v.begin(); it != v.end();
+         ++it) {
+      m << *it;
+    }
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::set<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::set<T> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::set<T>::const_iterator it = v.begin(); it != v.end();
-       ++it) {
-    m << *it;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::set<T>::const_iterator it = v.begin(); it != v.end();
+         ++it) {
+      m << *it;
+    }
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::map<K,V>&) -> &'a
 template<class K, class V>
 inline rrr::Marshal &operator<<(rrr::Marshal &m, const std::map<K, V> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::map<K, V>::const_iterator it = v.begin(); it != v.end();
-       ++it) {
-    m << it->first << it->second;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::map<K, V>::const_iterator it = v.begin(); it != v.end();
+         ++it) {
+      m << it->first << it->second;
+    }
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::unordered_set<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator<<(rrr::Marshal &m,
                                 const std::unordered_set<T> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::unordered_set<T>::const_iterator it = v.begin();
-       it != v.end(); ++it) {
-    m << *it;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::unordered_set<T>::const_iterator it = v.begin();
+         it != v.end(); ++it) {
+      m << *it;
+    }
+    return m;
+  // }
 }
 
-// @unsafe - Template serialization with pointer dereference
-// SAFETY: Iterator dereferencing is safe within container bounds
+// @unsafe
+// @lifetime: (&'a, const std::unordered_map<K,V>&) -> &'a
 template<class K, class V>
 inline rrr::Marshal &operator<<(rrr::Marshal &m,
                                 const std::unordered_map<K, V> &v) {
-  v64 v_len = v.size();
-  m << v_len;
-  for (typename std::unordered_map<K, V>::const_iterator it = v.begin();
-       it != v.end(); ++it) {
-    m << it->first << it->second;
-  }
-  return m;
+  // @unsafe {
+    v64 v_len = v.size();
+    m << v_len;
+    for (typename std::unordered_map<K, V>::const_iterator it = v.begin();
+         it != v.end(); ++it) {
+      m << it->first << it->second;
+    }
+    return m;
+  // }
 }
 
+// @unsafe
+// @lifetime: (&'a, i8&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::i8 &v) {
   verify(m.read(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, i16&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::i16 &v) {
   verify(m.read(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, i32&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::i32 &v) {
   verify(m.read(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, i64&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::i64 &v) {
   verify(m.read(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, v32&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::v32 &v) {
   char byte0;
   verify(m.peek(&byte0, 1) == 1);
@@ -699,6 +754,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::v32 &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, v64&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::v64 &v) {
   char byte0;
   //Log_info("peeking data of %d", m.peek(&byte0, 1));
@@ -711,31 +768,43 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, rrr::v64 &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, uint8_t&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, uint8_t &u) {
   verify(m.read(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, uint16_t&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, uint16_t &u) {
   verify(m.read(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, uint32_t&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, uint32_t &u) {
   verify(m.read(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, uint64_t&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, uint64_t &u) {
   verify(m.read(&u, sizeof(u)) == sizeof(u));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, double&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, double &v) {
   verify(m.read(&v, sizeof(v)) == sizeof(v));
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::string&) -> &'a
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::string &v) {
   v64 v_len;
   m >> v_len;
@@ -746,6 +815,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::string &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::pair<T1,T2>&) -> &'a
 template<class T1, class T2>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::pair<T1, T2> &v) {
   m >> v.first;
@@ -753,6 +824,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::pair<T1, T2> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::vector<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::vector<T> &v) {
   v64 v_len;
@@ -767,6 +840,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::vector<T> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::list<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::list<T> &v) {
   v64 v_len;
@@ -780,6 +855,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::list<T> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::set<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::set<T> &v) {
   v64 v_len;
@@ -793,6 +870,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::set<T> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::map<K,V>&) -> &'a
 template<class K, class V>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::map<K, V> &v) {
   v64 v_len;
@@ -807,6 +886,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::map<K, V> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::unordered_set<T>&) -> &'a
 template<class T>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::unordered_set<T> &v) {
   v64 v_len;
@@ -820,6 +901,8 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::unordered_set<T> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, std::unordered_map<K,V>&) -> &'a
 template<class K, class V>
 inline rrr::Marshal &operator>>(rrr::Marshal &m, std::unordered_map<K, V> &v) {
   v64 v_len;
@@ -834,14 +917,17 @@ inline rrr::Marshal &operator>>(rrr::Marshal &m, std::unordered_map<K, V> &v) {
   return m;
 }
 
+// @unsafe
+// @lifetime: (&'a, MarshallDeputy&) -> &'a
 inline rrr::Marshal& operator>>(rrr::Marshal& m, rrr::MarshallDeputy& rhs) {
   m >> rhs.kind_;
   rhs.CreateActualObjectFrom(m);
   return m;
 }
 
-// @safe - Serializes MarshallDeputy with virtual dispatch
 // SAFETY: Proper null checking and virtual method call
+// @unsafe
+// @lifetime: (&'a, const MarshallDeputy&) -> &'a
 inline rrr::Marshal& operator<<(rrr::Marshal& m,const rrr::MarshallDeputy& rhs) {
   verify(rhs.kind_ != rrr::MarshallDeputy::UNKNOWN);
   verify(rhs.sp_data_ != nullptr);

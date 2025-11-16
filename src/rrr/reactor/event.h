@@ -11,13 +11,13 @@
 
 // External safety annotations for std::shared_ptr and Event operations
 // @external: {
-//   std::enable_shared_from_this::shared_from_this: [safe, () -> std::shared_ptr<auto>]
-//   std::make_shared: [safe, (auto...) -> std::shared_ptr<auto>]
-//   std::shared_ptr::operator*: [safe, () -> auto&]
-//   std::shared_ptr::operator->: [safe, () -> auto*]
-//   std::shared_ptr::get: [safe, () -> auto*]
-//   std::shared_ptr::operator=: [safe, (const std::shared_ptr<auto>&) -> std::shared_ptr<auto>&]
-//   std::vector::push_back: [safe, (auto) -> void]
+//   std::enable_shared_from_this::shared_from_this: [unsafe, () -> std::shared_ptr<auto>]
+//   std::make_shared: [unsafe, (auto...) -> std::shared_ptr<auto>]
+//   std::shared_ptr::operator*: [unsafe, () -> auto&]
+//   std::shared_ptr::operator->: [unsafe, () -> auto*]
+//   std::shared_ptr::get: [unsafe, () -> auto*]
+//   std::shared_ptr::operator=: [unsafe, (const std::shared_ptr<auto>&) -> std::shared_ptr<auto>&]
+//   std::vector::push_back: [unsafe, (auto) -> void]
 // }
 
 namespace rrr {

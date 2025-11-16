@@ -14,6 +14,15 @@
 #include "server.hpp"
 #include "utils.hpp"
 
+// External safety annotations for atomic operations
+// @external: {
+//   std::__atomic_base::load: [unsafe]
+//   std::__atomic_base::store: [unsafe]
+//   std::__atomic_base::fetch_add: [unsafe]
+//   std::__atomic_base::fetch_sub: [unsafe]
+// }
+
+
 using namespace std;
 
 // External safety annotations for std functions used in this module
@@ -127,7 +136,7 @@ int ServerConnection::run_async(const std::function<void()>& f) {
 // @unsafe - Begins reply marshaling with locking
 // SAFETY: Protected by output spinlock
 void ServerConnection::begin_reply(const Request& req, i32 error_code /* =... */) {
-    out_l_.lock();
+    out_l_.borrow_mut()->lock();
     v32 v_error_code = error_code;
     v64 v_reply_xid = req.xid;
 
@@ -153,7 +162,7 @@ void ServerConnection::end_reply() {
         server_->poll_thread_worker_->update_mode(*this, Pollable::READ | Pollable::WRITE);
     }
 
-    out_l_.unlock();
+    out_l_.borrow_mut()->unlock();
 }
 
 // @unsafe - Reads requests and dispatches to handlers
@@ -278,12 +287,12 @@ void ServerConnection::handle_write() {
         return;
     }
 
-    out_l_.lock();
+    out_l_.borrow_mut()->lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
         server_->poll_thread_worker_->update_mode(*this, Pollable::READ);
     }
-    out_l_.unlock();
+    out_l_.borrow_mut()->unlock();
 }
 
 // @safe - Simple error handler
@@ -322,11 +331,11 @@ void ServerConnection::close() {
 // @safe - Returns poll mode based on output buffer
 int ServerConnection::poll_mode() const {
     int mode = Pollable::READ;
-    out_l_.lock();
+    out_l_.borrow_mut()->lock();
     if (!out_.empty()) {
         mode |= Pollable::WRITE;
     }
-    out_l_.unlock();
+    out_l_.borrow_mut()->unlock();
     return mode;
 }
 
@@ -469,7 +478,7 @@ void Server::server_loop(struct addrinfo* svr_addr) {
             setsockopt(clnt_socket, SOL_SOCKET, SO_RCVBUF, &buf_len, sizeof(buf_len));
             setsockopt(clnt_socket, SOL_SOCKET, SO_SNDBUF, &buf_len, sizeof(buf_len));
             sconns_l_.lock();
-            auto sconn = rusty::Arc<ServerConnection>::make_in_place(this, clnt_socket);
+            auto sconn = rusty::Arc<ServerConnection>::make(this, clnt_socket);
             const_cast<ServerConnection&>(*sconn).weak_self_ = sconn;  // Initialize weak to self
             sconns_.insert(sconn.clone());  // Insert Arc into set
             sconns_l_.unlock();
@@ -502,7 +511,7 @@ void ServerListener::handle_read() {
       Log_debug("server@%s got new client, fd=%d", this->addr_.c_str(), clnt_socket);
       verify(set_nonblocking(clnt_socket, true) == 0);
 
-      auto sconn = rusty::Arc<ServerConnection>::make_in_place(server_, clnt_socket);
+      auto sconn = rusty::Arc<ServerConnection>::make(server_, clnt_socket);
       const_cast<ServerConnection&>(*sconn).weak_self_ = sconn;  // Initialize weak to self
       server_->sconns_l_.lock();
       server_->sconns_.insert(sconn.clone());  // Insert Arc into set
@@ -645,7 +654,7 @@ int Server::start(const char* bind_addr) {
     return -1;
   }
   string addr(bind_addr, strlen(bind_addr));
-  sp_server_listener_ = rusty::Arc<ServerListener>::make_in_place(this, addr);
+  sp_server_listener_ = rusty::Arc<ServerListener>::make(this, addr);
   poll_thread_worker_->add(sp_server_listener_);
   return 0;
 }

@@ -43,6 +43,7 @@ class ALock {
     return next_id_++;
   }
 
+  // @unsafe - Pure virtual function for lock implementation
   virtual uint64_t vlock(uint64_t owner,
                          const std::function<void(uint64_t)> &yes_callback,
                          const std::function<void(void)> &no_callback,
@@ -59,6 +60,7 @@ class ALock {
       done_(false) {
   }
 
+  // @unsafe - Constructs std::function and calls virtual vlock
   virtual uint64_t lock(uint64_t owner,
                         const std::function<void(void)> &yes_callback,
                         const std::function<void(void)> &no_callback,
@@ -512,6 +514,7 @@ class TimeoutALock: public ALock {
         status_(WAIT) {
     }
 
+    // @safe
     status_t get_status() {
       //            std::lock_guard<std::mutex> guard(mtx_);
       return status_;
@@ -637,11 +640,13 @@ class ALockGroup {
     status_ = s;
   }
 
+  // @safe
   status_t get_status() {
     //        std::lock_guard<std::mutex> guard(mtx_);
     return status_;
   }
 
+  // @unsafe
   void add(ALock *alock, ALock::type_t type = ALock::WLOCK) {
 
 

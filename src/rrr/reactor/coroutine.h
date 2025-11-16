@@ -3,6 +3,8 @@
 #include <rusty/box.hpp>
 #include <rusty/rc.hpp>
 #include <rusty/option.hpp>
+#include <rusty/cell.hpp>
+#include <rusty/refcell.hpp>
 
 #define USE_BOOST_COROUTINE2
 
@@ -38,7 +40,7 @@ typedef boost::coroutines2::coroutine<void()> coro_t;
 #endif
 
 class Reactor;
-// @safe - Single-threaded coroutine with rusty::Rc ownership
+// @unsafe - Interior mutability with RefCell for const method mutations
 class Coroutine {
  public:
   // @safe - Returns current coroutine with single-threaded reference counting
@@ -50,13 +52,13 @@ class Coroutine {
 
   enum Status {INIT=0, STARTED, PAUSED, RESUMED, FINISHED, RECYCLED};
 
-  // Made mutable for interior mutability with rusty::Rc
-  mutable Status status_ = INIT; //
-  mutable std::move_only_function<void()> func_{};
+  // Interior mutability for use with rusty::Rc (const methods need to modify state)
+  rusty::Cell<Status> status_ = rusty::Cell<Status>(INIT);
+  rusty::RefCell<std::move_only_function<void()>> func_;
 
   // Migrated from std::unique_ptr to rusty::Box with Option for nullable semantics
-  mutable rusty::Option<rusty::Box<boost_coro_task_t>> boost_coro_task_{};
-  mutable boost::optional<boost_coro_yield_t&> boost_coro_yield_{};
+  rusty::RefCell<rusty::Option<rusty::Box<boost_coro_task_t>>> boost_coro_task_;
+  rusty::RefCell<boost::optional<boost_coro_yield_t&>> boost_coro_yield_;
 
   Coroutine() = delete;
   Coroutine(std::move_only_function<void()> func);

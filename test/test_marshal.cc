@@ -472,12 +472,16 @@ public:
     CustomMarshallable() : Marshallable(100), id(0) {}
     CustomMarshallable(i32 _id, const std::string& _name, const std::vector<double>& _data)
         : Marshallable(100), id(_id), name(_name), data(_data) {}
-    
+
+    // @safe
+    // @lifetime: (&'a, &'b mut) -> &'b mut
     Marshal& ToMarshal(Marshal& m) const override {
         m << id << name << data;
         return m;
     }
-    
+
+    // @safe
+    // @lifetime: (&'a mut, &'b mut) -> &'b mut
     Marshal& FromMarshal(Marshal& m) override {
         m >> id >> name >> data;
         return m;

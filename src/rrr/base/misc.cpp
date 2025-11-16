@@ -13,6 +13,10 @@
 //   readlink: [unsafe, (const char*, char*, size_t) -> ssize_t]
 //   snprintf: [unsafe, (char*, size_t, const char*, ...) -> int]
 //   getpid: [unsafe, () -> pid_t]
+//   std::__atomic_base::load: [unsafe]
+//   std::__atomic_base::store: [unsafe]
+//   std::__atomic_base::fetch_add: [unsafe]
+//   std::__atomic_base::fetch_sub: [unsafe]
 // }
 
 namespace rrr {

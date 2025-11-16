@@ -23,6 +23,9 @@
 //   std::unique_lock: [safe, (std::mutex&) -> void]
 //   std::chrono::duration: [safe, (double) -> void]
 //   std::function: [safe, (auto) -> void]
+//   std::vector::push_back: [safe, (auto) -> void]
+//   rrr::Log::error: [unsafe]
+//   Log_error: [unsafe]
 // }
 
 namespace rrr {
@@ -89,10 +92,8 @@ public:
     // @unsafe - Thread-safe timed_out check (non-blocking)
     // SAFETY: Protected by mutex
     bool timed_out() {
-        Pthread_mutex_lock(&ready_m_);
-        bool t = timed_out_;
-        Pthread_mutex_unlock(&ready_m_);
-        return t;
+        auto guard = state_.lock();
+        return guard->timed_out;
     }
 
     Marshal& get_reply() {
@@ -100,6 +101,7 @@ public:
         return reply_;
     }
 
+    // @unsafe - Calls unsafe wait()
     i32 get_error_code() {
         wait();
         return error_code_;
@@ -119,6 +121,7 @@ private:
     std::vector<Future*> futures_;
 
 public:
+    // @unsafe 
     void add(Future* f) {
         if (f == nullptr) {
             Log_error("Invalid Future object passed to FutureGroup!");
@@ -145,7 +148,8 @@ public:
 // SAFETY: Proper socket lifecycle, thread-safe pending futures, explicit Arc reference counting
 // MIGRATED: Now uses rusty::Arc<Client> with explicit weak self-reference instead of shared_from_this()
 class Client: public Pollable {
-    mutable Marshal in_, out_;
+    rusty::RefCell<Marshal> in_;
+    rusty::RefCell<Marshal> out_;
 
     /**
      * Shared Arc to PollThreadWorker - thread-safe access
@@ -154,23 +158,22 @@ class Client: public Pollable {
 
     // Weak self-reference for registration with poll thread worker
     // Initialized by set_weak_self() after Arc creation
-    // Mutable so it can be initialized through const Arc reference
-    mutable rusty::sync::Weak<Client> weak_self_;
+    rusty::RefCell<rusty::sync::Weak<Client>> weak_self_;
 
-    // Mutable for interior mutability (Arc gives const access)
-    mutable int sock_;
+    // Interior mutability for use with Arc (const methods need to modify state)
+    rusty::Cell<int> sock_;
     enum {
         NEW, CONNECTED, CLOSED
     };
-    mutable int status_;
+    rusty::Cell<int> status_;
 
-    mutable rusty::Option<rusty::Box<Marshal::bookmark>> bmark_;
+    rusty::RefCell<rusty::Option<rusty::Box<Marshal::bookmark>>> bmark_;
 
-    mutable Counter xid_counter_;
-    mutable std::unordered_map<i64, Future*> pending_fu_;
+    rusty::RefCell<Counter> xid_counter_;
+    rusty::RefCell<std::unordered_map<i64, Future*>> pending_fu_;
 
-    mutable SpinLock pending_fu_l_;
-    mutable SpinLock out_l_;
+    rusty::RefCell<SpinLock> pending_fu_l_;
+    rusty::RefCell<SpinLock> out_l_;
 
     // @unsafe - Cancels all pending futures
     // SAFETY: Protected by spinlock
@@ -185,22 +188,33 @@ public:
     }
 
 
-    Client(rusty::Arc<PollThreadWorker> poll_thread_worker): poll_thread_worker_(poll_thread_worker), sock_(-1), status_(NEW) { }
+    Client(rusty::Arc<PollThreadWorker> poll_thread_worker):
+        in_(),              // Default-constructs RefCell<Marshal>
+        out_(),             // Default-constructs RefCell<Marshal>
+        poll_thread_worker_(poll_thread_worker),
+        weak_self_(),       // Default-constructs RefCell<Weak<Client>>
+        sock_(-1),
+        status_(NEW),
+        bmark_(),           // Default-constructs RefCell<Option<Box<bookmark>>>
+        xid_counter_(),     // Default-constructs RefCell<Counter>
+        pending_fu_(),      // Default-constructs RefCell<map>
+        pending_fu_l_(),    // Default-constructs RefCell<SpinLock>
+        out_l_() { }        // Default-constructs RefCell<SpinLock>
 
     // Factory method to create Client with Arc
-    // @safe - Returns Arc<Client> with explicit reference counting
+    // @unsafe - Returns Arc<Client> with explicit reference counting
     // SAFETY: Arc provides thread-safe reference counting with polymorphism support
     static rusty::Arc<Client> create(rusty::Arc<PollThreadWorker> poll_thread_worker) {
-        auto client = rusty::Arc<Client>::make_in_place(poll_thread_worker);
+        auto client = rusty::Arc<Client>::make(poll_thread_worker);
         // Initialize weak self-reference for poll thread registration
         // weak_self_ is mutable, so no const_cast needed
-        client->weak_self_ = client;
+        *client->weak_self_.borrow_mut() = client;
         return client;
     }
 
     // Set weak self-reference (alternative to factory if Arc created elsewhere)
     void set_weak_self(const rusty::Arc<Client>& self) {
-        weak_self_ = self;
+        *weak_self_.borrow_mut() = self;
     }
 
     /**
@@ -216,18 +230,24 @@ public:
     // SAFETY: Must be called after begin_request
     void end_request() const;
 
+    // @unsafe - Marshals data into output buffer
+    // SAFETY: Protected by RefCell borrow checks
+    // @lifetime: (&'a, const T&) -> &'a
     template<class T>
     const Client& operator <<(const T& v) const {
-        if (status_ == CONNECTED) {
-            this->out_ << v;
+        if (status_.get() == CONNECTED) {
+            *this->out_.borrow_mut() << v;
         }
         return *this;
     }
 
     // NOTE: this function is used *internally* by Python extension
+    // @unsafe - Marshals data from another Marshal
+    // SAFETY: Protected by RefCell borrow checks
+    // @lifetime: (&'a, Marshal&) -> &'a
     const Client& operator <<(Marshal& m) const {
-        if (status_ == CONNECTED) {
-            this->out_.read_from_marshal(m, m.content_size());
+        if (status_.get() == CONNECTED) {
+            this->out_.borrow_mut()->read_from_marshal(m, m.content_size());
         }
         return *this;
     }
@@ -242,10 +262,11 @@ public:
     void close() const;
 
     int fd() const {
-        return sock_;
+        return sock_.get();
     }
 
-    // @safe - Returns current poll mode based on output buffer
+    // @unsafe - Returns current poll mode based on output buffer
+    // SAFETY: Uses RefCell borrow operations
     int poll_mode() const;
     // @unsafe - Processes incoming data
     // SAFETY: Protected by spinlock for pending futures

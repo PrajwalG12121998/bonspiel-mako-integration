@@ -391,6 +391,7 @@ public:
         __fu__->release();
         return __ret__;
     }
+    // @unsafe - Calls unsafe begin_request/end_request
     rrr::Future* async_add(const rrr::v32& a, const rrr::v32& b, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
         rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::ADD, __fu_attr__);
         if (__fu__ != nullptr) {

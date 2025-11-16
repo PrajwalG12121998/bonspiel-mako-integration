@@ -24,18 +24,18 @@
 
 // External safety annotations for STL operations
 // @external: {
-//   operator!=: [safe, (auto, auto) -> bool]
-//   operator==: [safe, (auto, auto) -> bool]
-//   std::*::find: [safe, (auto) -> auto]
-//   std::*::end: [safe, () -> auto]
-//   std::make_shared: [safe, (auto...) -> std::shared_ptr<auto>]
-//   std::shared_ptr::operator*: [safe, () -> auto&]
-//   std::shared_ptr::operator->: [safe, () -> auto*]
-//   std::shared_ptr::get: [safe, () -> auto*]
-//   std::shared_ptr::operator=: [safe, (const std::shared_ptr<auto>&) -> std::shared_ptr<auto>&]
-//   std::shared_ptr::shared_ptr: [safe, (auto...) -> void]
-//   std::list::push_back: [safe, (auto) -> void]
-//   std::vector::push_back: [safe, (auto) -> void]
+//   operator!=: [unsafe, (auto, auto) -> bool]
+//   operator==: [unsafe, (auto, auto) -> bool]
+//   std::*::find: [unsafe, (auto) -> auto]
+//   std::*::end: [unsafe, () -> auto]
+//   std::make_shared: [unsafe, (auto...) -> std::shared_ptr<auto>]
+//   std::shared_ptr::operator*: [unsafe, () -> auto&]
+//   std::shared_ptr::operator->: [unsafe, () -> auto*]
+//   std::shared_ptr::get: [unsafe, () -> auto*]
+//   std::shared_ptr::operator=: [unsafe, (const std::shared_ptr<auto>&) -> std::shared_ptr<auto>&]
+//   std::shared_ptr::shared_ptr: [unsafe, (auto...) -> void]
+//   std::list::push_back: [unsafe, (auto) -> void]
+//   std::vector::push_back: [unsafe, (auto) -> void]
 // }
 
 namespace rrr {
@@ -45,9 +45,18 @@ using std::make_shared;
 
 class Coroutine;
 // TODO for now we depend on the rpc services, fix in the future.
-// @safe - Thread-safe reactor with thread-local storage
+// @unsafe - Interior mutability with RefCell for const method mutations
 class Reactor {
  public:
+  // Default constructor - all fields have default constructors
+  Reactor() = default;
+
+  // Delete copy and move constructors (RefCell and Cell are not copyable/movable)
+  Reactor(const Reactor&) = delete;
+  Reactor& operator=(const Reactor&) = delete;
+  Reactor(Reactor&&) = delete;
+  Reactor& operator=(Reactor&&) = delete;
+
   // @safe - Returns thread-local reactor instance with single-threaded Rc
   // SAFETY: Thread-local storage, single-threaded access only
   static rusty::Rc<Reactor> GetReactor();
@@ -59,14 +68,15 @@ class Reactor {
    * in case it is freed by the caller after a yield.
    */
   // @safe - Events managed with std::shared_ptr (polymorphism support)
-  mutable std::list<std::shared_ptr<Event>> all_events_{};
-  mutable std::list<std::shared_ptr<Event>> waiting_events_{};
+  // Interior mutability for const methods
+  rusty::RefCell<std::list<std::shared_ptr<Event>>> all_events_;
+  rusty::RefCell<std::list<std::shared_ptr<Event>>> waiting_events_;
   // @safe - Coroutines managed with single-threaded Rc
-  mutable std::set<rusty::Rc<Coroutine>> coros_{};
-  mutable std::vector<rusty::Rc<Coroutine>> available_coros_{};
-  mutable std::unordered_map<uint64_t, std::function<void(Event&)>> processors_{};
-  mutable std::list<std::shared_ptr<Event>> timeout_events_{};
-  mutable bool looping_{false};
+  rusty::RefCell<std::set<rusty::Rc<Coroutine>>> coros_;
+  rusty::RefCell<std::vector<rusty::Rc<Coroutine>>> available_coros_;
+  rusty::RefCell<std::unordered_map<uint64_t, std::function<void(Event&)>>> processors_;
+  rusty::RefCell<std::list<std::shared_ptr<Event>>> timeout_events_;
+  rusty::Cell<bool> looping_;
   std::thread::id thread_id_{};
 #ifdef REUSE_CORO
 #define REUSING_CORO (true)
@@ -105,7 +115,7 @@ class Reactor {
     auto reactor = GetReactor();
     // Rc gives const access, use const_cast for mutation (safe: thread-local, single owner)
     auto& events = const_cast<Reactor&>(*reactor).all_events_;
-    events.push_back(sp_ev);
+    events.borrow_mut()->push_back(sp_ev);
     return sp_ev;
   }
 
@@ -121,33 +131,33 @@ class Reactor {
   }
 };
 
-// @safe - Thread-safe polling thread with automatic memory management
+// @unsafe - Interior mutability with RefCell for thread-safe const method mutations
 class PollThreadWorker {
-    // Friend Arc to allow make_in_place access to private constructor
+    // Friend Arc to allow make access to private constructor
     friend class rusty::Arc<PollThreadWorker>;
 
 private:
-    // All members are mutable to allow const methods with interior mutability
-    mutable Epoll poll_{};
+    // Interior mutability for const methods (used with Arc)
+    rusty::RefCell<Epoll> poll_;
 
     // Wrap non-movable SpinLocks in rusty::Box to make class movable
-    mutable rusty::Box<SpinLock> l_;
+    rusty::RefCell<rusty::Box<SpinLock>> l_;
     // @safe - Uses rusty::Arc<Pollable> for polymorphic thread-safe reference counting
     // SAFETY: Arc provides thread-safe reference counting with built-in polymorphism support
     // Pollable is abstract base class with multiple derived types (Client, ServerConnection, etc.)
     // Authoritative storage: fd -> Arc<Pollable>
-    mutable std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
-    mutable std::unordered_map<int, int> mode_; // fd->mode
+    rusty::RefCell<std::unordered_map<int, rusty::Arc<Pollable>>> fd_to_pollable_;
+    rusty::RefCell<std::unordered_map<int, int>> mode_; // fd->mode
 
     // @safe - Uses rusty::Arc<Job> for polymorphic thread-safe reference counting
-    mutable std::set<rusty::Arc<Job>> set_sp_jobs_;
+    rusty::RefCell<std::set<rusty::Arc<Job>>> set_sp_jobs_;
 
-    mutable std::unordered_set<int> pending_remove_;  // Store fds to remove
-    mutable rusty::Box<SpinLock> pending_remove_l_;
-    mutable rusty::Box<SpinLock> lock_job_;
+    rusty::RefCell<std::unordered_set<int>> pending_remove_;  // Store fds to remove
+    rusty::RefCell<rusty::Box<SpinLock>> pending_remove_l_;
+    rusty::RefCell<rusty::Box<SpinLock>> lock_job_;
 
-    mutable rusty::Option<rusty::thread::JoinHandle<void>> join_handle_;
-    mutable rusty::Box<std::atomic<bool>> stop_flag_;  // Wrap atomic to make movable
+    rusty::RefCell<rusty::Option<rusty::thread::JoinHandle<void>>> join_handle_;
+    rusty::RefCell<rusty::Box<std::atomic<bool>>> stop_flag_;  // Wrap atomic to make movable
 
     // Private constructor - use create() factory
     PollThreadWorker();
@@ -171,34 +181,9 @@ public:
     PollThreadWorker(const PollThreadWorker&) = delete;
     PollThreadWorker& operator=(const PollThreadWorker&) = delete;
 
-    // Explicit move constructors
-    PollThreadWorker(PollThreadWorker&& other) noexcept
-        : poll_(std::move(other.poll_)),
-          l_(std::move(other.l_)),
-          fd_to_pollable_(std::move(other.fd_to_pollable_)),
-          mode_(std::move(other.mode_)),
-          set_sp_jobs_(std::move(other.set_sp_jobs_)),
-          pending_remove_(std::move(other.pending_remove_)),
-          pending_remove_l_(std::move(other.pending_remove_l_)),
-          lock_job_(std::move(other.lock_job_)),
-          join_handle_(std::move(other.join_handle_)),
-          stop_flag_(std::move(other.stop_flag_)) {}
-
-    PollThreadWorker& operator=(PollThreadWorker&& other) noexcept {
-        if (this != &other) {
-            poll_ = std::move(other.poll_);
-            l_ = std::move(other.l_);
-            fd_to_pollable_ = std::move(other.fd_to_pollable_);
-            mode_ = std::move(other.mode_);
-            set_sp_jobs_ = std::move(other.set_sp_jobs_);
-            pending_remove_ = std::move(other.pending_remove_);
-            pending_remove_l_ = std::move(other.pending_remove_l_);
-            lock_job_ = std::move(other.lock_job_);
-            join_handle_ = std::move(other.join_handle_);
-            stop_flag_ = std::move(other.stop_flag_);
-        }
-        return *this;
-    }
+    // Move operations deleted - RefCell is not movable, use Arc for sharing
+    PollThreadWorker(PollThreadWorker&& other) = delete;
+    PollThreadWorker& operator=(PollThreadWorker&& other) = delete;
 
     // @safe - Thread-safe addition of polymorphic pollable object
     // SAFETY: Arc provides built-in polymorphism support, protected by spinlock
@@ -216,7 +201,7 @@ public:
     void remove(rusty::Arc<Job> sp_job) const;
 
     // For testing: get number of epoll Remove() calls
-    int get_remove_count() const { return poll_.remove_count_.load(); }
+    int get_remove_count() const { return poll_.borrow()->remove_count_.load(); }
 };
 
 } // namespace rrr

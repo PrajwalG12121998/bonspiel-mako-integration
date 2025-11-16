@@ -6,6 +6,15 @@
 #include "marshal.hpp"
 #include <rusty/rc.hpp>
 
+// External safety annotations for atomic operations
+// @external: {
+//   std::__atomic_base::load: [unsafe]
+//   std::__atomic_base::store: [unsafe]
+//   std::__atomic_base::fetch_add: [unsafe]
+//   std::__atomic_base::fetch_sub: [unsafe]
+// }
+
+
 using namespace std;
 
 namespace rrr {
@@ -390,7 +399,7 @@ size_t Marshal::read_from_marshal(Marshal& m, size_t n) {
     } else {
 
         // number of bytes that need to be copied
-        size_t copy_n = std::min(tail_->data->size - tail_->write_idx, n);
+        size_t copy_n = safe_min(tail_->data->size - tail_->write_idx, n);
         char* buf = new char[copy_n];
         n_fetch = m.read(buf, copy_n);
         verify(n_fetch == copy_n);
@@ -471,6 +480,7 @@ std::mutex mdi_mutex_g;
 thread_local MarshallDeputy::MarContainer mc_th_;
 thread_local bool mc_th_initialized_ = false;
 
+// @unsafe - Registers initializer with mutex locking and map insertion
 int MarshallDeputy::RegInitializer(int32_t cmd_type,
                                    function<Marshallable*()> init) {
   md_mutex_g.lock();
@@ -500,6 +510,7 @@ MarshallDeputy::GetInitializer(int32_t type) {
 // @safe - Returns reference to global factory registry
 // SAFETY: Protected by mutex, initializes on first access
 // Uses Construct On First Use idiom to avoid static initialization order fiasco
+// @lifetime: () -> &'static
 MarshallDeputy::MarContainer&
 MarshallDeputy::GetInitializers() {
   // Note: Caller must hold md_mutex_g

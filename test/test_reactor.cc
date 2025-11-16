@@ -1,3 +1,6 @@
+// @unsafe - Test file with mutable fields in test classes
+// @unsafe {
+
 #include <gtest/gtest.h>
 #include <thread>
 #include <atomic>
@@ -17,13 +20,14 @@ using namespace rrr;
 using namespace std::chrono;
 
 // Concrete implementation of Pollable for testing
+// @unsafe - Uses mutable fields for interior mutability in test scenarios
 class TestPollable : public Pollable {
 private:
     int fd_;
     mutable int mode_;  // mutable to allow modification through const methods
-    mutable std::function<void()> read_handler_;
-    mutable std::function<void()> write_handler_;
-    mutable std::function<void()> error_handler_;
+    mutable std::function<void()> read_handler_;  // mutable handler
+    mutable std::function<void()> write_handler_;  // mutable handler
+    mutable std::function<void()> error_handler_;  // mutable handler
 
 public:
     ~TestPollable() override = default;
@@ -38,38 +42,59 @@ public:
         return mode_;
     }
 
+    // @unsafe - Modifies mutable field
     void set_mode(int mode) const {  // const method
+        // @unsafe {
         mode_ = mode;
+        // }
     }
 
+    // @unsafe - Uses mutable field
     void handle_read() override {
+        // @unsafe {
         if (read_handler_) {
             read_handler_();
         }
+        // }
     }
 
+    // @unsafe - Uses mutable field
     void handle_write() override {
+        // @unsafe {
         if (write_handler_) {
             write_handler_();
         }
+        // }
     }
 
+    // @unsafe - Uses mutable field
     void handle_error() override {
+        // @unsafe {
         if (error_handler_) {
             error_handler_();
         }
+        // }
     }
 
+    // @unsafe - Modifies mutable field
     void set_read_handler(std::function<void()> handler) const {  // const method
+        // @unsafe {
         read_handler_ = handler;
+        // }
     }
 
+    // @unsafe - Modifies mutable field
     void set_write_handler(std::function<void()> handler) const {  // const method
+        // @unsafe {
         write_handler_ = handler;
+        // }
     }
 
+    // @unsafe - Modifies mutable field
     void set_error_handler(std::function<void()> handler) const {  // const method
+        // @unsafe {
         error_handler_ = handler;
+        // }
     }
 };
 
@@ -518,3 +543,5 @@ int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// } @unsafe

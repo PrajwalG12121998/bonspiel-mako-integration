@@ -82,7 +82,7 @@ class Epoll {
   Epoll(const Epoll&) = delete;
   Epoll& operator=(const Epoll&) = delete;
 
-  // @safe - Adds file descriptor to epoll/kqueue
+  // @unsafe - Adds file descriptor to epoll/kqueue
   // SAFETY: Uses system calls with proper error checking, Arc for polymorphism
   // userdata is raw Pollable* for lookup
   int Add(const rusty::Arc<Pollable>& poll, void* userdata) {
@@ -123,7 +123,7 @@ class Epoll {
   }
 
 
-  // @safe - Removes file descriptor from epoll/kqueue
+  // @unsafe - Removes file descriptor from epoll/kqueue
   // SAFETY: Uses system calls, ignores errors for already removed fds, Arc for polymorphism
   int Remove(const rusty::Arc<Pollable>& poll) {
     remove_count_++;  // Track Remove() calls for testing

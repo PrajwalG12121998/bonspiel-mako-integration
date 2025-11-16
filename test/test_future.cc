@@ -11,6 +11,12 @@
 #include "rpc/server.hpp"
 #include "misc/marshal.hpp"
 
+// External safety annotations for std::shared_ptr atomic internals
+// @external: {
+//   _Atomic_count: [unsafe]
+//   __shared_ptr: [unsafe]
+// }
+
 using namespace rrr;
 using namespace std::chrono;
 
@@ -27,7 +33,8 @@ public:
     std::atomic<int> call_count{0};
     std::atomic<bool> should_delay{false};
     std::atomic<int> delay_ms{100};
-    
+
+    // @unsafe - Takes address-of member function pointers
     int __reg_to__(Server* svr) {
         int ret = 0;
         ret = svr->reg(FAST_ECHO, this, &TestFutureService::fast_echo_wrapper);

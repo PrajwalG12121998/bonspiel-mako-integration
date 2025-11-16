@@ -14,6 +14,14 @@
 #include "base/misc.hpp"
 #include "reactor/reactor.h"
 
+// External safety annotations for STL functions
+// @external: {
+//   std::make_pair: [unsafe]
+//   std::map::operator[]: [unsafe]
+//   std::map::erase: [unsafe]
+// }
+
+// @unsafe
 namespace rrr {
 
 class Alarm: public FrequentJob {
@@ -89,7 +97,7 @@ class Alarm: public FrequentJob {
   uint64_t add(uint64_t time, std::function<void(void)> func) {
     //	std::lock_guard<std::mutex> guard(lock_);
     //Log::debug("add timeout callback");
-    auto id = next_id_++;
+    uint64_t id = next_id_++;
     waiting_[id] = std::make_pair(time, func);
     //	idx_time_[std::make_pair(time, id)] = func;
     return id;

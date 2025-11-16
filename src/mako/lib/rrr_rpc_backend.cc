@@ -188,7 +188,7 @@ rusty::Arc<rrr::Client> RrrRpcBackend::GetOrCreateClient(uint8_t shard_idx,
     if (stop_) {
         clients_lock_.unlock();
         Warning("GetOrCreateClient: stop requested, not creating/returning client");
-        return nullptr;
+        return rusty::Arc<rrr::Client>();  // Return empty Arc
     }
 
     auto it = clients_.find(session_key);
@@ -632,13 +632,13 @@ void RrrRpcBackend::Stop() {
 
     // Close all outstanding client connections to unblock any waiting futures.
     Notice("RrrRpcBackend::Stop: Closing client connections");
-    std::vector<std::shared_ptr<rrr::Client>> clients_to_close;
+    std::vector<rusty::Arc<rrr::Client>> clients_to_close;
     {
         std::lock_guard<std::mutex> guard(clients_lock_);
         Notice("RrrRpcBackend::Stop: Found %zu client connections to close", clients_.size());
         for (auto& entry : clients_) {
             if (entry.second) {
-                clients_to_close.push_back(entry.second);
+                clients_to_close.push_back(entry.second.clone());
             }
         }
         clients_.clear();

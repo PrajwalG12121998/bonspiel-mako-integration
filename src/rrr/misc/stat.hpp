@@ -10,8 +10,9 @@ public:
     int64_t max_;
     int64_t min_;
 
+    // @safe - Simple initialization
     AvgStat(): n_stat_(0), sum_(0), avg_(0), max_(0), min_(0) {}
-    
+
     void sample(int64_t s = 1) {
         ++n_stat_;
         sum_ += s;
@@ -28,14 +29,18 @@ public:
         min_ = 0;
     }
 
+    // @unsafe 
     AvgStat reset() {
         AvgStat stat = *this;
         clear();
         return stat;
     }
 
+    // @unsafe
     AvgStat peek() {
-        return *this;
+        AvgStat result;
+        result = *this;
+        return result;
     }
 
     int64_t avg() {

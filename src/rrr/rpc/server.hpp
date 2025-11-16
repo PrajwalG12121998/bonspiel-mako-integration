@@ -147,7 +147,7 @@ class ServerConnection: public Pollable {
     friend class ServerListener;
 
     Marshal in_, out_;
-    mutable SpinLock out_l_;
+    rusty::RefCell<SpinLock> out_l_;
 
     Marshal block_read_in;
 
@@ -380,6 +380,7 @@ public:
     // @safe - Registers RPC handler function
     int reg(i32 rpc_id, const RequestHandler& func);
 
+    // @unsafe
     template<class S>
     int reg(i32 rpc_id, S* svc, void (S::*svc_func)(rusty::Box<Request>, WeakServerConnection)) {
 
