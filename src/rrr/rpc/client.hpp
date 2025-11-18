@@ -31,6 +31,7 @@
 namespace rrr {
 
 class Future;
+// @unsafe - Forward declaration of Client class
 class Client;
 
 // @safe - Simple attribute struct for Future callbacks

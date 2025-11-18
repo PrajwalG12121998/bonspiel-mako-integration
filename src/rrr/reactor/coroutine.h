@@ -40,14 +40,14 @@ typedef boost::coroutines2::coroutine<void()> coro_t;
 #endif
 
 class Reactor;
-// @unsafe - Interior mutability with RefCell for const method mutations
+// @unsafe - Single-threaded coroutine with rusty::Rc ownership and mutable fields for interior mutability
 class Coroutine {
  public:
-  // @safe - Returns current coroutine with single-threaded reference counting
+  // Returns current coroutine with single-threaded reference counting
   static rusty::Rc<Coroutine> CurrentCoroutine();
   // the argument cannot be a reference because it could be declared on stack.
   // Using std::move_only_function to support move-only callables (e.g., lambdas capturing rusty::Box)
-  // @safe - Creates and runs coroutine with rusty::Rc ownership
+  // Creates and runs coroutine with rusty::Rc ownership
   static rusty::Rc<Coroutine> CreateRun(std::move_only_function<void()> func);
 
   enum Status {INIT=0, STARTED, PAUSED, RESUMED, FINISHED, RECYCLED};

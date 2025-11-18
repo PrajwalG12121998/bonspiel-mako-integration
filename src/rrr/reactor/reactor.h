@@ -45,7 +45,7 @@ using std::make_shared;
 
 class Coroutine;
 // TODO for now we depend on the rpc services, fix in the future.
-// @unsafe - Interior mutability with RefCell for const method mutations
+// @unsafe - Thread-safe reactor with thread-local storage and mutable fields for interior mutability
 class Reactor {
  public:
   // Default constructor - all fields have default constructors
@@ -57,21 +57,21 @@ class Reactor {
   Reactor(Reactor&&) = delete;
   Reactor& operator=(Reactor&&) = delete;
 
-  // @safe - Returns thread-local reactor instance with single-threaded Rc
+  // Returns thread-local reactor instance with single-threaded Rc
   // SAFETY: Thread-local storage, single-threaded access only
   static rusty::Rc<Reactor> GetReactor();
   static thread_local rusty::Rc<Reactor> sp_reactor_th_;
-  // @safe - Thread-local current coroutine with single-threaded Rc
+  // Thread-local current coroutine with single-threaded Rc
   static thread_local rusty::Rc<Coroutine> sp_running_coro_th_;
   /**
    * A reactor needs to keep reference to all coroutines created,
    * in case it is freed by the caller after a yield.
    */
-  // @safe - Events managed with std::shared_ptr (polymorphism support)
+  // Events managed with std::shared_ptr (polymorphism support)
   // Interior mutability for const methods
   mutable std::list<std::shared_ptr<Event>> all_events_{};
   mutable std::list<std::shared_ptr<Event>> waiting_events_{};
-  // @safe - Coroutines managed with single-threaded Rc
+  // Coroutines managed with single-threaded Rc
   mutable std::set<rusty::Rc<Coroutine>> coros_{};
   mutable std::vector<rusty::Rc<Coroutine>> available_coros_{};
   mutable std::unordered_map<uint64_t, std::function<void(Event&)>> processors_{};
@@ -84,16 +84,16 @@ class Reactor {
 #define REUSING_CORO (false)
 #endif
 
-  // @safe - Checks and processes timeout events with std::shared_ptr
+  // Checks and processes timeout events with std::shared_ptr
   void CheckTimeout(std::vector<std::shared_ptr<Event>>&) const;
   /**
    * @param ev. is usually allocated on coroutine stack. memory managed by user.
    */
-  // @safe - Creates and runs a new coroutine with rusty::Rc ownership
+  // Creates and runs a new coroutine with rusty::Rc ownership
   rusty::Rc<Coroutine> CreateRunCoroutine(std::move_only_function<void()> func) const;
-  // @safe - Main event loop
+  // Main event loop
   void Loop(bool infinite = false) const;
-  // @safe - Continues execution of a paused coroutine with rusty::Rc
+  // Continues execution of a paused coroutine with rusty::Rc
   void ContinueCoro(rusty::Rc<Coroutine> sp_coro) const;
 
   ~Reactor() {
