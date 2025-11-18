@@ -150,8 +150,9 @@ public:
     }
 };
 
-// @safe - RPC client with socket management and marshaling using Arc
-// SAFETY: Proper socket lifecycle, thread-safe pending futures, explicit Arc reference counting
+// @unsafe - RPC client with socket management and marshaling using Arc
+// SAFETY: Uses mutable SpinLocks for thread-safe interior mutability
+// Client is accessed from multiple threads (main + PollThreadWorker), so SpinLocks provide synchronization
 // MIGRATED: Now uses rusty::Arc<Client> with explicit weak self-reference instead of shared_from_this()
 class Client: public Pollable {
     rusty::RefCell<Marshal> in_;
@@ -178,8 +179,8 @@ class Client: public Pollable {
     rusty::RefCell<Counter> xid_counter_;
     rusty::RefCell<std::unordered_map<i64, Future*>> pending_fu_;
 
-    rusty::RefCell<SpinLock> pending_fu_l_;
-    rusty::RefCell<SpinLock> out_l_;
+    mutable SpinLock pending_fu_l_;
+    mutable SpinLock out_l_;
 
     // @unsafe - Cancels all pending futures
     // SAFETY: Protected by spinlock
@@ -204,8 +205,8 @@ public:
         bmark_(),           // Default-constructs RefCell<Option<Box<bookmark>>>
         xid_counter_(),     // Default-constructs RefCell<Counter>
         pending_fu_(),      // Default-constructs RefCell<map>
-        pending_fu_l_(),    // Default-constructs RefCell<SpinLock>
-        out_l_() { }        // Default-constructs RefCell<SpinLock>
+        pending_fu_l_(),    // Default-constructs mutable SpinLock
+        out_l_() { }        // Default-constructs mutable SpinLock
 
     // Factory method to create Client with Arc
     // @unsafe - Returns Arc<Client> with explicit reference counting
@@ -280,7 +281,7 @@ public:
     // @unsafe - Sends buffered data
     // SAFETY: Protected by output spinlock
     void handle_write();
-    // @safe - Error handler that closes connection
+    // @unsafe - Error handler that closes connection
     void handle_error();
 
 };

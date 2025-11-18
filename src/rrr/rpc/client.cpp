@@ -97,12 +97,12 @@ void Future::notify_ready() {
 // SAFETY: Protected by spinlock, proper refcount management
 void Client::invalidate_pending_futures() const {
   list<Future*> futures;
-  pending_fu_l_.borrow_mut()->lock();
+  pending_fu_l_.lock();
   for (auto& it: *pending_fu_.borrow()) {
     futures.push_back(it.second);
   }
   pending_fu_.borrow_mut()->clear();
-  pending_fu_l_.borrow_mut()->unlock();
+  pending_fu_l_.unlock();
 
   for (auto& fu: futures) {
     if (fu != nullptr) {
@@ -226,13 +226,13 @@ void Client::handle_write() {
     return;
   }
 
-  out_l_.borrow_mut()->lock();
+  out_l_.lock();
   out_.borrow_mut()->write_to_fd(sock_.get());
   if (out_.borrow()->empty()) {
     //Log_info("Client handle_write setting read mode here...");
     poll_thread_worker_->update_mode(*this, Pollable::READ);
   }
-  out_l_.borrow_mut()->unlock();
+  out_l_.unlock();
 }
 
 // @unsafe - Reads and processes RPC responses
@@ -261,14 +261,14 @@ void Client::handle_read() {
 
       *in_.borrow_mut() >> v_reply_xid >> v_error_code;
 
-      pending_fu_l_.borrow_mut()->lock();
+      pending_fu_l_.lock();
       unordered_map<i64, Future*>::iterator
           it = pending_fu_.borrow_mut()->find(v_reply_xid.get());
       if (it != pending_fu_.borrow_mut()->end()) {
         Future* fu = it->second;
         verify(fu->xid_ == v_reply_xid.get());
         pending_fu_.borrow_mut()->erase(it);
-        pending_fu_l_.borrow_mut()->unlock();
+        pending_fu_l_.unlock();
 
         fu->error_code_ = v_error_code.get();
         fu->reply_.read_from_marshal(*in_.borrow_mut(),
@@ -281,7 +281,7 @@ void Client::handle_read() {
         fu->release();
       } else {
         // the future might timed out
-        pending_fu_l_.borrow_mut()->unlock();
+        pending_fu_l_.unlock();
       }
 
     } else {
@@ -295,37 +295,37 @@ void Client::handle_read() {
 // SAFETY: Uses RefCell borrow operations
 int Client::poll_mode() const {
   int mode = Pollable::READ;
-  out_l_.borrow_mut()->lock();
+  out_l_.lock();
   if (!out_.borrow()->empty()) {
     mode |= Pollable::WRITE;
   }
-  out_l_.borrow_mut()->unlock();
+  out_l_.unlock();
   return mode;
 }
 
 // @unsafe - Starts new RPC request with marshaling
 // SAFETY: Protected by spinlocks, proper refcounting
 Future* Client::begin_request(i32 rpc_id, const FutureAttr& attr /* =... */) const {
-  out_l_.borrow_mut()->lock();
+  out_l_.lock();
 
   if (status_.get() != CONNECTED) {
     return nullptr;
   }
 
   Future* fu = new Future(xid_counter_.borrow_mut()->next(), attr);
-  pending_fu_l_.borrow_mut()->lock();
+  pending_fu_l_.lock();
   (*pending_fu_.borrow_mut())[fu->xid_] = fu;
-  pending_fu_l_.borrow_mut()->unlock();
+  pending_fu_l_.unlock();
   //Log_info("Starting a new request with rpc_id %ld,xid_:%llu", rpc_id,fu->xid_);
   // check if the client gets closed in the meantime
   if (status_.get() != CONNECTED) {
-    pending_fu_l_.borrow_mut()->lock();
+    pending_fu_l_.lock();
     unordered_map<i64, Future*>::iterator it = pending_fu_.borrow_mut()->find(fu->xid_);
     if (it != pending_fu_.borrow_mut()->end()) {
       it->second->release();
       pending_fu_.borrow_mut()->erase(it);
     }
-    pending_fu_l_.borrow_mut()->unlock();
+    pending_fu_l_.unlock();
 
     return nullptr;
   }
@@ -356,7 +356,7 @@ void Client::end_request() const {
   // const_cast needed: Arc gives const access but update_mode() needs non-const reference
   poll_thread_worker_->update_mode(const_cast<Client&>(*this), Pollable::READ | Pollable::WRITE);
 
-  out_l_.borrow_mut()->unlock();
+  out_l_.unlock();
 }
 
 // @unsafe - Constructs pool with PollThreadWorker ownership

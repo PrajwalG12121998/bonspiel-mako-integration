@@ -136,7 +136,7 @@ int ServerConnection::run_async(const std::function<void()>& f) {
 // @unsafe - Begins reply marshaling with locking
 // SAFETY: Protected by output spinlock
 void ServerConnection::begin_reply(const Request& req, i32 error_code /* =... */) {
-    out_l_.borrow_mut()->lock();
+    out_l_.lock();
     v32 v_error_code = error_code;
     v64 v_reply_xid = req.xid;
 
@@ -162,7 +162,7 @@ void ServerConnection::end_reply() {
         server_->poll_thread_worker_->update_mode(*this, Pollable::READ | Pollable::WRITE);
     }
 
-    out_l_.borrow_mut()->unlock();
+    out_l_.unlock();
 }
 
 // @unsafe - Reads requests and dispatches to handlers
@@ -287,12 +287,12 @@ void ServerConnection::handle_write() {
         return;
     }
 
-    out_l_.borrow_mut()->lock();
+    out_l_.lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
         server_->poll_thread_worker_->update_mode(*this, Pollable::READ);
     }
-    out_l_.borrow_mut()->unlock();
+    out_l_.unlock();
 }
 
 // @safe - Simple error handler
@@ -331,11 +331,11 @@ void ServerConnection::close() {
 // @safe - Returns poll mode based on output buffer
 int ServerConnection::poll_mode() const {
     int mode = Pollable::READ;
-    out_l_.borrow_mut()->lock();
+    out_l_.lock();
     if (!out_.empty()) {
         mode |= Pollable::WRITE;
     }
-    out_l_.borrow_mut()->unlock();
+    out_l_.unlock();
     return mode;
 }
 

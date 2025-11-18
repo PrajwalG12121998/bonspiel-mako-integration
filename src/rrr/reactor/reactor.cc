@@ -251,8 +251,11 @@ rusty::Arc<PollThreadWorker> PollThreadWorker::create() {
     thread_arc
   );
 
-  // Store handle (using const method)
-  *arc->join_handle_.borrow_mut() = rusty::Some(std::move(handle));
+  // Store handle (using const method with mutex)
+  {
+    auto guard = arc->join_handle_.lock();
+    *guard = rusty::Some(std::move(handle));
+  }
 
   return arc;
 }
@@ -260,25 +263,28 @@ rusty::Arc<PollThreadWorker> PollThreadWorker::create() {
 // Explicit shutdown method
 void PollThreadWorker::shutdown() const {
   // Remove all pollables before stopping
-  for (auto& pair : *fd_to_pollable_.borrow()) {
+  for (auto& pair : fd_to_pollable_) {
     // Arc provides const access, but remove() needs non-const reference
     // Safe: we're managing the lifecycle and shutting down
     this->remove(const_cast<Pollable&>(*pair.second));
   }
 
   // Signal thread to stop
-  (**stop_flag_.borrow_mut()).store(true);
+  (*stop_flag_).store(true);
 
-  // Join thread
-  if (join_handle_.borrow()->is_some()) {
-    join_handle_.borrow_mut()->take().unwrap().join();
+  // Join thread (using mutex for thread safety)
+  {
+    auto guard = join_handle_.lock();
+    if (guard->is_some()) {
+      guard->take().unwrap().join();
+    }
   }
 }
 
 // Destructor just warns if not shut down
 PollThreadWorker::~PollThreadWorker() {
   // Check stop flag value
-  if (!(**stop_flag_.borrow()).load()) {
+  if (!(*stop_flag_).load()) {
     Log_error("PollThreadWorker destroyed without shutdown() - thread may leak!");
   }
 }
@@ -286,10 +292,10 @@ PollThreadWorker::~PollThreadWorker() {
 // @unsafe - Triggers ready jobs in coroutines
 // SAFETY: Uses spinlock for thread safety
 void PollThreadWorker::TriggerJob() const {
-  (**lock_job_.borrow_mut()).lock();
-  auto jobs_exec = *set_sp_jobs_.borrow();
-  set_sp_jobs_.borrow_mut()->clear();
-  (**lock_job_.borrow_mut()).unlock();
+  (*lock_job_).lock();
+  auto jobs_exec = set_sp_jobs_;
+  set_sp_jobs_.clear();
+  (*lock_job_).unlock();
 
   // Process Arc<Job> jobs
   auto it = jobs_exec.begin();
@@ -311,85 +317,89 @@ void PollThreadWorker::TriggerJob() const {
 // @unsafe - Main polling loop with complex synchronization
 // SAFETY: Uses spinlocks and proper synchronization primitives
 void PollThreadWorker::poll_loop() const {
-  while (!(**stop_flag_.borrow()).load()) {
+  while (!(*stop_flag_).load()) {
     TriggerJob();
     // Wait() now directly casts userdata to Pollable* and calls handlers
     // Safe because deferred removal guarantees object stays in fd_to_pollable_ map
-    poll_.borrow_mut()->Wait();
+    poll_.Wait();
     TriggerJob();
 
     // Process deferred removals AFTER all events handled
-    (**pending_remove_l_.borrow_mut()).lock();
-    std::unordered_set<int> remove_fds = std::move(*pending_remove_.borrow_mut());
-    pending_remove_.borrow_mut()->clear();
-    (**pending_remove_l_.borrow_mut()).unlock();
+    (*pending_remove_l_).lock();
+    std::unordered_set<int> remove_fds = std::move(pending_remove_);
+    pending_remove_.clear();
+    (*pending_remove_l_).unlock();
 
     for (int fd : remove_fds) {
-      (**l_.borrow_mut()).lock();
+      (*l_).lock();
 
-      auto it = fd_to_pollable_.borrow()->find(fd);
-      if (it != fd_to_pollable_.borrow()->end()) {
-        auto sp_poll = it->second;
-
-        // Check if fd was NOT reused (still in mode_ map)
-        if (mode_.borrow()->find(fd) != mode_.borrow()->end()) {
-          poll_.borrow_mut()->Remove(sp_poll);
-        }
-
-        // Remove from map - object may be destroyed here
-        fd_to_pollable_.borrow_mut()->erase(it);
-        mode_.borrow_mut()->erase(fd);
+      auto it = fd_to_pollable_.find(fd);
+      if (it == fd_to_pollable_.end()) {
+        (*l_).unlock();
+        continue;
       }
 
-      (**l_.borrow_mut()).unlock();
+      auto sp_poll = it->second;
+
+      // Check if fd was NOT reused (still in mode_ map)
+      if (mode_.find(fd) != mode_.end()) {
+        poll_.Remove(sp_poll);
+      }
+
+      // Remove from map - object may be destroyed here
+      fd_to_pollable_.erase(it);
+      mode_.erase(fd);
+
+      (*l_).unlock();
     }
     TriggerJob();
-    // Rc gives const access, Loop() is const (safe: thread-local)
-    auto reactor_rc = Reactor::GetReactor();
-    reactor_rc->Loop();
+    Reactor::GetReactor()->Loop();
   }
 
   // Process any final pending removals after stop_flag_ is set
   // This ensures destructor cleanup is processed even if the thread
   // exits the loop before processing the last batch
-  (**pending_remove_l_.borrow_mut()).lock();
-  std::unordered_set<int> remove_fds = std::move(*pending_remove_.borrow_mut());
-  pending_remove_.borrow_mut()->clear();
-  (**pending_remove_l_.borrow_mut()).unlock();
+  (*pending_remove_l_).lock();
+  std::unordered_set<int> remove_fds = std::move(pending_remove_);
+  pending_remove_.clear();
+  (*pending_remove_l_).unlock();
 
   for (int fd : remove_fds) {
-    (**l_.borrow_mut()).lock();
+    (*l_).lock();
 
-    auto it = fd_to_pollable_.borrow()->find(fd);
-    if (it != fd_to_pollable_.borrow()->end()) {
-      auto sp_poll = it->second;
-
-      // Check if fd was NOT reused (still in mode_ map)
-      if (mode_.borrow()->find(fd) != mode_.borrow()->end()) {
-        poll_.borrow_mut()->Remove(sp_poll);
-      }
-
-      // Remove from map - object may be destroyed here
-      fd_to_pollable_.borrow_mut()->erase(it);
-      mode_.borrow_mut()->erase(fd);
+    auto it = fd_to_pollable_.find(fd);
+    if (it == fd_to_pollable_.end()) {
+      (*l_).unlock();
+      continue;
     }
 
-    (**l_.borrow_mut()).unlock();
+    auto sp_poll = it->second;
+
+    // Check if fd was NOT reused (still in mode_ map)
+    if (mode_.find(fd) != mode_.end()) {
+      poll_.Remove(sp_poll);
+    }
+
+    // Remove from map - object may be destroyed here
+    fd_to_pollable_.erase(it);
+    mode_.erase(fd);
+
+    (*l_).unlock();
   }
 }
 
 // @safe - Thread-safe job addition with polymorphic Arc
 void PollThreadWorker::add(rusty::Arc<Job> sp_job) const {
-  (**lock_job_.borrow_mut()).lock();
-  set_sp_jobs_.borrow_mut()->insert(sp_job);
-  (**lock_job_.borrow_mut()).unlock();
+  (*lock_job_).lock();
+  set_sp_jobs_.insert(sp_job);
+  (*lock_job_).unlock();
 }
 
 // @safe - Thread-safe job removal with polymorphic Arc
 void PollThreadWorker::remove(rusty::Arc<Job> sp_job) const {
-  (**lock_job_.borrow_mut()).lock();
-  set_sp_jobs_.borrow_mut()->erase(sp_job);
-  (**lock_job_.borrow_mut()).unlock();
+  (*lock_job_).lock();
+  set_sp_jobs_.erase(sp_job);
+  (*lock_job_).unlock();
 }
 
 // @safe - Adds pollable with polymorphic Arc ownership
@@ -398,26 +408,26 @@ void PollThreadWorker::add(rusty::Arc<Pollable> sp_poll) const{
   int fd = sp_poll->fd();
   int poll_mode = sp_poll->poll_mode();
 
-  (**l_.borrow_mut()).lock();
+  (*l_).lock();
 
   // Check if already exists
-  if (fd_to_pollable_.borrow()->find(fd) != fd_to_pollable_.borrow()->end()) {
-    (**l_.borrow_mut()).unlock();
+  if (fd_to_pollable_.find(fd) != fd_to_pollable_.end()) {
+    (*l_).unlock();
     return;
   }
 
   // Store in map
-  (*fd_to_pollable_.borrow_mut())[fd] = sp_poll.clone();
-  (*mode_.borrow_mut())[fd] = poll_mode;
+  fd_to_pollable_[fd] = sp_poll.clone();
+  mode_[fd] = poll_mode;
 
   // userdata = raw Pollable* for lookup (safe - kept alive by fd_to_pollable_ map)
   // Arc::get() returns const pointer, but epoll needs void* userdata
   // Safe: userdata is only used as an opaque identifier, not for mutation
   void* userdata = const_cast<void*>(static_cast<const void*>(sp_poll.get()));
 
-  poll_.borrow_mut()->Add(sp_poll, userdata);
+  poll_.Add(sp_poll, userdata);
 
-  (**l_.borrow_mut()).unlock();
+  (*l_).unlock();
 }
 
 // @unsafe - Removes pollable with deferred cleanup
@@ -425,43 +435,43 @@ void PollThreadWorker::add(rusty::Arc<Pollable> sp_poll) const{
 void PollThreadWorker::remove(Pollable& poll) const {
   int fd = poll.fd();
 
-  (**l_.borrow_mut()).lock();
-  bool found = (fd_to_pollable_.borrow()->find(fd) != fd_to_pollable_.borrow()->end());
-  (**l_.borrow_mut()).unlock();
+  (*l_).lock();
+  bool found = (fd_to_pollable_.find(fd) != fd_to_pollable_.end());
+  (*l_).unlock();
 
   if (!found) {
     return;  // Not found
   }
 
   // Add to pending_remove (actual removal happens after epoll_wait)
-  (**pending_remove_l_.borrow_mut()).lock();
-  pending_remove_.borrow_mut()->insert(fd);
-  (**pending_remove_l_.borrow_mut()).unlock();
+  (*pending_remove_l_).lock();
+  pending_remove_.insert(fd);
+  (*pending_remove_l_).unlock();
 }
 
 // @unsafe - Updates poll mode
 // SAFETY: Protected by spinlock, validates poll existence
 void PollThreadWorker::update_mode(Pollable& poll, int new_mode) const {
   int fd = poll.fd();
-  (**l_.borrow_mut()).lock();
+  (*l_).lock();
 
   // Verify the pollable is registered
-  if (fd_to_pollable_.borrow()->find(fd) == fd_to_pollable_.borrow()->end()) {
-    (**l_.borrow_mut()).unlock();
+  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
+    (*l_).unlock();
     return;
   }
 
-  auto mode_it = mode_.borrow()->find(fd);
-  verify(mode_it != mode_.borrow()->end());
+  auto mode_it = mode_.find(fd);
+  verify(mode_it != mode_.end());
   int old_mode = mode_it->second;
-  (*mode_.borrow_mut())[fd] = new_mode;
+  mode_[fd] = new_mode;
 
   if (new_mode != old_mode) {
     void* userdata = &poll;  // Use address of reference
-    poll_.borrow_mut()->Update(poll, userdata, new_mode, old_mode);
+    poll_.Update(poll, userdata, new_mode, old_mode);
   }
 
-  (**l_.borrow_mut()).unlock();
+  (*l_).unlock();
 }
 
 } // namespace rrr

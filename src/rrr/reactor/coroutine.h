@@ -63,9 +63,13 @@ class Coroutine {
   Coroutine() = delete;
   Coroutine(std::move_only_function<void()> func);
   ~Coroutine();
+  // @unsafe - Uses std::bind and function pointers
   void BoostRunWrapper(boost_coro_yield_t& yield);
+  // @unsafe - Uses std::bind and function pointers
   void Run() const;  // Made const for Rc compatibility
+  // @unsafe - Calls boost coroutine yield
   void Yield() const;  // Made const for Rc compatibility
+  // @unsafe - Resumes boost coroutine
   void Continue() const;  // Made const for Rc compatibility
   bool Finished() const;
 

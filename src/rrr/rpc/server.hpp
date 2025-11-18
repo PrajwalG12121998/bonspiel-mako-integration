@@ -147,7 +147,7 @@ class ServerConnection: public Pollable {
     friend class ServerListener;
 
     Marshal in_, out_;
-    rusty::RefCell<SpinLock> out_l_;
+    mutable SpinLock out_l_;
 
     Marshal block_read_in;
 

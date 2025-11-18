@@ -131,33 +131,37 @@ class Reactor {
   }
 };
 
-// @unsafe - Interior mutability with RefCell for thread-safe const method mutations
+// @unsafe - Uses mutable fields for thread-safe interior mutability
+// SAFETY: All mutable state is protected by SpinLocks for thread-safety
 class PollThreadWorker {
     // Friend Arc to allow make access to private constructor
     friend class rusty::Arc<PollThreadWorker>;
 
 private:
-    // Interior mutability for const methods (used with Arc)
-    rusty::RefCell<Epoll> poll_;
+    // Use mutable for thread-shared state (thread-safe with SpinLocks)
+    // RefCell is NOT thread-safe and causes "already mutably borrowed" panics
+    mutable Epoll poll_;
 
     // Wrap non-movable SpinLocks in rusty::Box to make class movable
-    rusty::RefCell<rusty::Box<SpinLock>> l_;
-    // @safe - Uses rusty::Arc<Pollable> for polymorphic thread-safe reference counting
+    mutable rusty::Box<SpinLock> l_;
+    // Uses rusty::Arc<Pollable> for polymorphic thread-safe reference counting
     // SAFETY: Arc provides thread-safe reference counting with built-in polymorphism support
     // Pollable is abstract base class with multiple derived types (Client, ServerConnection, etc.)
     // Authoritative storage: fd -> Arc<Pollable>
-    rusty::RefCell<std::unordered_map<int, rusty::Arc<Pollable>>> fd_to_pollable_;
-    rusty::RefCell<std::unordered_map<int, int>> mode_; // fd->mode
+    mutable std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
+    mutable std::unordered_map<int, int> mode_; // fd->mode
 
-    // @safe - Uses rusty::Arc<Job> for polymorphic thread-safe reference counting
-    rusty::RefCell<std::set<rusty::Arc<Job>>> set_sp_jobs_;
+    // Uses rusty::Arc<Job> for polymorphic thread-safe reference counting
+    mutable std::set<rusty::Arc<Job>> set_sp_jobs_;
 
-    rusty::RefCell<std::unordered_set<int>> pending_remove_;  // Store fds to remove
-    rusty::RefCell<rusty::Box<SpinLock>> pending_remove_l_;
-    rusty::RefCell<rusty::Box<SpinLock>> lock_job_;
+    mutable std::unordered_set<int> pending_remove_;  // Store fds to remove
+    mutable rusty::Box<SpinLock> pending_remove_l_;
+    mutable rusty::Box<SpinLock> lock_job_;
 
-    rusty::RefCell<rusty::Option<rusty::thread::JoinHandle<void>>> join_handle_;
-    rusty::RefCell<rusty::Box<std::atomic<bool>>> stop_flag_;  // Wrap atomic to make movable
+    // join_handle_ accessed during shutdown - use mutex for thread safety
+    // Mutex is needed because PollThreadWorker is shared via Arc
+    mutable rusty::Mutex<rusty::Option<rusty::thread::JoinHandle<void>>> join_handle_;
+    mutable rusty::Box<std::atomic<bool>> stop_flag_;  // Wrap atomic to make movable
 
     // Private constructor - use create() factory
     PollThreadWorker();
@@ -185,23 +189,23 @@ public:
     PollThreadWorker(PollThreadWorker&& other) = delete;
     PollThreadWorker& operator=(PollThreadWorker&& other) = delete;
 
-    // @safe - Thread-safe addition of polymorphic pollable object
+    // Thread-safe addition of polymorphic pollable object
     // SAFETY: Arc provides built-in polymorphism support, protected by spinlock
     void add(rusty::Arc<Pollable> poll) const;
 
-    // @safe - Thread-safe removal of pollable object
+    // Thread-safe removal of pollable object
     void remove(Pollable& poll) const;
-    // @safe - Thread-safe mode update
+    // Thread-safe mode update
     void update_mode(Pollable& poll, int new_mode) const;
 
     // Frequent Job
-    // @safe - Thread-safe job management with polymorphic Arc
+    // Thread-safe job management with polymorphic Arc
     // SAFETY: Arc provides built-in polymorphism support, protected by spinlock
     void add(rusty::Arc<Job> sp_job) const;
     void remove(rusty::Arc<Job> sp_job) const;
 
     // For testing: get number of epoll Remove() calls
-    int get_remove_count() const { return poll_.borrow()->remove_count_.load(); }
+    int get_remove_count() const { return poll_.remove_count_.load(); }
 };
 
 } // namespace rrr
