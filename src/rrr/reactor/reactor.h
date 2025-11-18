@@ -69,14 +69,14 @@ class Reactor {
    */
   // @safe - Events managed with std::shared_ptr (polymorphism support)
   // Interior mutability for const methods
-  rusty::RefCell<std::list<std::shared_ptr<Event>>> all_events_;
-  rusty::RefCell<std::list<std::shared_ptr<Event>>> waiting_events_;
+  mutable std::list<std::shared_ptr<Event>> all_events_{};
+  mutable std::list<std::shared_ptr<Event>> waiting_events_{};
   // @safe - Coroutines managed with single-threaded Rc
-  rusty::RefCell<std::set<rusty::Rc<Coroutine>>> coros_;
-  rusty::RefCell<std::vector<rusty::Rc<Coroutine>>> available_coros_;
-  rusty::RefCell<std::unordered_map<uint64_t, std::function<void(Event&)>>> processors_;
-  rusty::RefCell<std::list<std::shared_ptr<Event>>> timeout_events_;
-  rusty::Cell<bool> looping_;
+  mutable std::set<rusty::Rc<Coroutine>> coros_{};
+  mutable std::vector<rusty::Rc<Coroutine>> available_coros_{};
+  mutable std::unordered_map<uint64_t, std::function<void(Event&)>> processors_{};
+  mutable std::list<std::shared_ptr<Event>> timeout_events_{};
+  mutable bool looping_{false};
   std::thread::id thread_id_{};
 #ifdef REUSE_CORO
 #define REUSING_CORO (true)
@@ -115,7 +115,7 @@ class Reactor {
     auto reactor = GetReactor();
     // Rc gives const access, use const_cast for mutation (safe: thread-local, single owner)
     auto& events = const_cast<Reactor&>(*reactor).all_events_;
-    events.borrow_mut()->push_back(sp_ev);
+    events.push_back(sp_ev);
     return sp_ev;
   }
 

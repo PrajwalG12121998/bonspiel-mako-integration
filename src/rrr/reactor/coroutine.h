@@ -53,12 +53,12 @@ class Coroutine {
   enum Status {INIT=0, STARTED, PAUSED, RESUMED, FINISHED, RECYCLED};
 
   // Interior mutability for use with rusty::Rc (const methods need to modify state)
-  rusty::Cell<Status> status_ = rusty::Cell<Status>(INIT);
-  rusty::RefCell<std::move_only_function<void()>> func_;
+  mutable Status status_ = INIT;
+  mutable std::move_only_function<void()> func_{};
 
   // Migrated from std::unique_ptr to rusty::Box with Option for nullable semantics
-  rusty::RefCell<rusty::Option<rusty::Box<boost_coro_task_t>>> boost_coro_task_;
-  rusty::RefCell<boost::optional<boost_coro_yield_t&>> boost_coro_yield_;
+  mutable rusty::Option<rusty::Box<boost_coro_task_t>> boost_coro_task_{};
+  mutable boost::optional<boost_coro_yield_t&> boost_coro_yield_{};
 
   Coroutine() = delete;
   Coroutine(std::move_only_function<void()> func);

@@ -57,16 +57,16 @@ Reactor::GetReactor() {
 rusty::Rc<Coroutine>
 Reactor::CreateRunCoroutine(std::move_only_function<void()> func) const {
   rusty::Rc<Coroutine> sp_coro;
-  if (REUSING_CORO && available_coros_.borrow()->size() > 0) {
+  if (REUSING_CORO && available_coros_.size() > 0) {
     //Log_info("Reusing stuff");
-    sp_coro = available_coros_.borrow()->back().clone();
-    available_coros_.borrow_mut()->pop_back();
+    sp_coro = available_coros_.back().clone();
+    available_coros_.pop_back();
     // Rc provides const access, use const_cast to modify (safe: single-threaded)
     auto& coro = const_cast<Coroutine&>(*sp_coro);
-    *coro.func_.borrow_mut() = std::move(func);
+    coro.func_ = std::move(func);
     // Reset boost_coro_task_ when reusing a recycled coroutine for a new function
-    *coro.boost_coro_task_.borrow_mut() = rusty::None;
-    coro.status_.set(Coroutine::INIT);
+    coro.boost_coro_task_ = rusty::None;
+    coro.status_ = Coroutine::INIT;
   } else {
     sp_coro = rusty::Rc<Coroutine>::make(std::move(func));
   }
@@ -79,22 +79,22 @@ Reactor::CreateRunCoroutine(std::move_only_function<void()> func) const {
     Log_error("[DEBUG] CreateRunCoroutine: sp_coro is null!");
   }
   verify(sp_coro);
-  auto pair = coros_.borrow_mut()->insert(sp_coro);
+  auto pair = coros_.insert(sp_coro);
   if (!pair.second) {
     Log_error("[DEBUG] CreateRunCoroutine: Failed to insert coroutine into coros_ set!");
-    Log_error("[DEBUG] coros_ size before insert: %zu", coros_.borrow()->size());
+    Log_error("[DEBUG] coros_ size before insert: %zu", coros_.size());
     Log_error("[DEBUG] REUSING_CORO: %d", REUSING_CORO);
   }
   verify(pair.second);
-  verify(coros_.borrow()->size() > 0);
-  
+  verify(coros_.size() > 0);
+
   sp_coro->Run();
   if (sp_coro->Finished()) {
-    coros_.borrow_mut()->erase(sp_coro);
+    coros_.erase(sp_coro);
   }
-  
+
   Loop();
-  
+
   // yielded or finished, reset to old coro.
   sp_running_coro_th_ = sp_old_coro;
   return sp_coro;
@@ -103,7 +103,7 @@ Reactor::CreateRunCoroutine(std::move_only_function<void()> func) const {
 // @safe - Checks timeout events and moves ready ones to ready list with std::shared_ptr
 void Reactor::CheckTimeout(std::vector<std::shared_ptr<Event>>& ready_events ) const {
   auto time_now = Time::now(true);
-  for (auto it = timeout_events_.borrow_mut()->begin(); it != timeout_events_.borrow_mut()->end();) {
+  for (auto it = timeout_events_.begin(); it != timeout_events_.end();) {
     Event& event = **it;
     auto status = event.status_;
     switch (status) {
@@ -121,7 +121,7 @@ void Reactor::CheckTimeout(std::vector<std::shared_ptr<Event>>& ready_events ) c
             event.status_ = Event::TIMEOUT;
           }
           ready_events.push_back(*it);
-          it = timeout_events_.borrow_mut()->erase(it);
+          it = timeout_events_.erase(it);
         } else {
           it++;
         }
@@ -129,7 +129,7 @@ void Reactor::CheckTimeout(std::vector<std::shared_ptr<Event>>& ready_events ) c
       }
       case Event::READY:
       case Event::DONE:
-        it = timeout_events_.borrow_mut()->erase(it);
+        it = timeout_events_.erase(it);
         break;
       default:
         verify(0);
@@ -143,7 +143,7 @@ void Reactor::CheckTimeout(std::vector<std::shared_ptr<Event>>& ready_events ) c
 // SAFETY: Thread-safe via thread_id verification
 void Reactor::Loop(bool infinite) const {
   verify(std::this_thread::get_id() == thread_id_);
-  looping_.set(infinite);
+  looping_ = infinite;
   do {
     // Keep processing events until no new ready events are found
     // This fixes the event chain propagation issue
@@ -154,15 +154,15 @@ void Reactor::Loop(bool infinite) const {
 
       // Check waiting events
       auto& events = waiting_events_;
-      for (auto it = events.borrow_mut()->begin(); it != events.borrow_mut()->end();) {
+      for (auto it = events.begin(); it != events.end();) {
         Event& event = **it;
         event.Test();
         if (event.status_ == Event::READY) {
           ready_events.push_back(*it);
-          it = events.borrow_mut()->erase(it);
+          it = events.erase(it);
           found_ready_events = true;
         } else if (event.status_ == Event::DONE) {
-          it = events.borrow_mut()->erase(it);
+          it = events.erase(it);
         } else {
           it ++;
         }
@@ -176,7 +176,7 @@ void Reactor::Loop(bool infinite) const {
         auto option_coro = event.wp_coro_.upgrade();
         verify(option_coro.is_some());
         auto sp_coro = option_coro.unwrap();
-        verify(coros_.borrow()->find(sp_coro) != coros_.borrow()->end());
+        verify(coros_.find(sp_coro) != coros_.end());
         if (event.status_ == Event::READY) {
           event.status_ = Event::DONE;
         } else {
@@ -190,7 +190,7 @@ void Reactor::Loop(bool infinite) const {
         break;
       }
     }
-  } while (looping_.get());
+  } while (looping_);
 }
 
 // @safe - Continues execution of paused coroutine with rusty::Rc
@@ -200,7 +200,7 @@ void Reactor::ContinueCoro(rusty::Rc<Coroutine> sp_coro) const {
   auto sp_old_coro = sp_running_coro_th_.clone();
   sp_running_coro_th_ = sp_coro.clone();
   verify(!sp_running_coro_th_->Finished());
-  if (sp_coro->status_.get() == Coroutine::INIT) {
+  if (sp_coro->status_ == Coroutine::INIT) {
     sp_coro->Run();
   } else {
     // PAUSED or RECYCLED
@@ -209,10 +209,10 @@ void Reactor::ContinueCoro(rusty::Rc<Coroutine> sp_coro) const {
   if (sp_running_coro_th_->Finished()) {
     if (REUSING_CORO) {
       // Rc provides const access, use const_cast to modify (safe: single-threaded)
-      const_cast<Coroutine&>(*sp_coro).status_.set(Coroutine::RECYCLED);
-      available_coros_.borrow_mut()->push_back(sp_running_coro_th_);
+      const_cast<Coroutine&>(*sp_coro).status_ = Coroutine::RECYCLED;
+      available_coros_.push_back(sp_running_coro_th_);
     }
-    coros_.borrow_mut()->erase(sp_running_coro_th_);
+    coros_.erase(sp_running_coro_th_);
   }
   sp_running_coro_th_ = sp_old_coro;
 }

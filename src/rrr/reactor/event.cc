@@ -61,7 +61,7 @@ void Event::Wait(uint64_t timeout) {
     auto reactor_rc = Reactor::GetReactor();
     auto& reactor = const_cast<Reactor&>(*reactor_rc);
     auto& waiting_events = reactor.waiting_events_;
-    waiting_events.borrow_mut()->push_back(shared_from_this());
+    waiting_events.push_back(shared_from_this());
 
     if (timeout > 0) {
       auto now = Time::now(true);
@@ -69,7 +69,7 @@ void Event::Wait(uint64_t timeout) {
       //Log_info("WAITING: %p", shared_from_this());
       // Log_info("wake up %lld, now %lld", wakeup_time_, now);
       auto& timeout_events = reactor.timeout_events_;
-      timeout_events.borrow_mut()->push_back(shared_from_this());
+      timeout_events.push_back(shared_from_this());
     }
     // TODO optimize timeout_events, sort by wakeup time.
 //      auto it = timeout_events.end();
