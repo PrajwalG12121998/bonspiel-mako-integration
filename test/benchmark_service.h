@@ -32,16 +32,16 @@ inline rrr::Marshal& operator >>(rrr::Marshal& m, point3& o) {
 class BenchmarkService: public rrr::Service {
 public:
     enum {
-        FAST_PRIME = 0x5c2cf26b,
-        FAST_DOT_PROD = 0x554252c5,
-        FAST_ADD = 0x1c62d584,
-        FAST_NOP = 0x6100326c,
-        FAST_VEC = 0x14a9b2a2,
-        PRIME = 0x3f90ca43,
-        DOT_PROD = 0x12b88302,
-        ADD = 0x6e695d1b,
-        NOP = 0x6baf7e60,
-        SLEEP = 0x2e670cc7,
+        FAST_PRIME = 0x348e1922,
+        FAST_DOT_PROD = 0x5d887cc1,
+        FAST_ADD = 0x2a40f946,
+        FAST_NOP = 0x17078ae6,
+        FAST_VEC = 0x6ce0090a,
+        PRIME = 0x5a72807d,
+        DOT_PROD = 0x2429b0bf,
+        ADD = 0x142e5d49,
+        NOP = 0x1e36f5a9,
+        SLEEP = 0x468ff641,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -251,200 +251,229 @@ protected:
     rrr::Client* __cl__;
 public:
     BenchmarkProxy(rrr::Client* cl): __cl__(cl) { }
-    rrr::Future* async_fast_prime(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::FAST_PRIME, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << n;
+    rrr::FutureResult async_fast_prime(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::FAST_PRIME, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << n;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 fast_prime(const rrr::i32& n, rrr::i8* flag) {
-        rrr::Future* __fu__ = this->async_fast_prime(n);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_fast_prime(n);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *flag;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_fast_dot_prod(const point3& p1, const point3& p2, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::FAST_DOT_PROD, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << p1;
-            *__cl__ << p2;
+    rrr::FutureResult async_fast_dot_prod(const point3& p1, const point3& p2, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::FAST_DOT_PROD, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << p1;
+        *__cl__ << p2;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 fast_dot_prod(const point3& p1, const point3& p2, double* v) {
-        rrr::Future* __fu__ = this->async_fast_dot_prod(p1, p2);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_fast_dot_prod(p1, p2);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *v;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_fast_add(const rrr::v32& a, const rrr::v32& b, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::FAST_ADD, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << a;
-            *__cl__ << b;
+    rrr::FutureResult async_fast_add(const rrr::v32& a, const rrr::v32& b, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::FAST_ADD, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << a;
+        *__cl__ << b;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 fast_add(const rrr::v32& a, const rrr::v32& b, rrr::v32* a_add_b) {
-        rrr::Future* __fu__ = this->async_fast_add(a, b);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_fast_add(a, b);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *a_add_b;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_fast_nop(const std::string& in_0, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::FAST_NOP, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << in_0;
+    rrr::FutureResult async_fast_nop(const std::string& in_0, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::FAST_NOP, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << in_0;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 fast_nop(const std::string& in_0) {
-        rrr::Future* __fu__ = this->async_fast_nop(in_0);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_fast_nop(in_0);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_fast_vec(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::FAST_VEC, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << n;
+    rrr::FutureResult async_fast_vec(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::FAST_VEC, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << n;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 fast_vec(const rrr::i32& n, std::vector<rrr::i64>* v) {
-        rrr::Future* __fu__ = this->async_fast_vec(n);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_fast_vec(n);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *v;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_prime(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::PRIME, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << n;
+    rrr::FutureResult async_prime(const rrr::i32& n, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::PRIME, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << n;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 prime(const rrr::i32& n, rrr::i8* flag) {
-        rrr::Future* __fu__ = this->async_prime(n);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_prime(n);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *flag;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_dot_prod(const point3& p1, const point3& p2, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::DOT_PROD, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << p1;
-            *__cl__ << p2;
+    rrr::FutureResult async_dot_prod(const point3& p1, const point3& p2, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::DOT_PROD, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << p1;
+        *__cl__ << p2;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 dot_prod(const point3& p1, const point3& p2, double* v) {
-        rrr::Future* __fu__ = this->async_dot_prod(p1, p2);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_dot_prod(p1, p2);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *v;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    // @unsafe - Calls unsafe begin_request/end_request
-    rrr::Future* async_add(const rrr::v32& a, const rrr::v32& b, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::ADD, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << a;
-            *__cl__ << b;
+    rrr::FutureResult async_add(const rrr::v32& a, const rrr::v32& b, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::ADD, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << a;
+        *__cl__ << b;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 add(const rrr::v32& a, const rrr::v32& b, rrr::v32* a_add_b) {
-        rrr::Future* __fu__ = this->async_add(a, b);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_add(a, b);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *a_add_b;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_nop(const std::string& in_0, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::NOP, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << in_0;
+    rrr::FutureResult async_nop(const std::string& in_0, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::NOP, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << in_0;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 nop(const std::string& in_0) {
-        rrr::Future* __fu__ = this->async_nop(in_0);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_nop(in_0);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_sleep(const double& sec, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(BenchmarkService::SLEEP, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << sec;
+    rrr::FutureResult async_sleep(const double& sec, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(BenchmarkService::SLEEP, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << sec;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 sleep(const double& sec) {
-        rrr::Future* __fu__ = this->async_sleep(sec);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_sleep(sec);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
 };

@@ -126,7 +126,7 @@ class Communicator {
 
   void SendStart(SimpleCommand& cmd,
                  int32_t output_size,
-                 std::function<void(Future *fu)> &callback);
+                 std::function<void(rusty::Arc<Future> fu)> &callback);
   void BroadcastDispatch(shared_ptr<vector<shared_ptr<SimpleCommand>>> vec_piece_data,
                          Coordinator *coo,
                          const std::function<void(int res, TxnOutput &)> &) ;

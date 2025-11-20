@@ -909,7 +909,13 @@ if(BUILD_TESTS)
     target_compile_options(test_future PRIVATE ${TEST_COMPILE_OPTIONS})
     target_link_libraries(test_future ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
     add_test(NAME test_future COMMAND test_future)
-    
+
+    # Future Performance Benchmark (not run in test suite)
+    add_executable(bench_future test/bench_future.cc)
+    target_include_directories(bench_future PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(bench_future PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(bench_future ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+
     # Reactor/Event System Tests
     add_executable(test_reactor test/test_reactor.cc)
     target_include_directories(test_reactor PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})

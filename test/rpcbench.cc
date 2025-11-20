@@ -86,18 +86,22 @@ static void* client_proc(void*) {
     }
     auto do_work = [cl, &fu_attr, rpc_id] {
         if (!should_stop) {
-            Future* fu = cl->begin_request(rpc_id, fu_attr);
+            auto fu_result = cl->begin_request(rpc_id, fu_attr);
+            if (fu_result.is_err()) {
+                return;
+            }
+            auto fu = fu_result.unwrap();
             if (rpc_id == BenchmarkService::FAST_NOP) {
                 *cl << request_str;
             } else if (rpc_id == BenchmarkService::FAST_VEC) {
-                *cl << rpc_bench_vector_size;   
+                *cl << rpc_bench_vector_size;
             };
             cl->end_request();
-            Future::safe_release(fu);
+            // Arc auto-released
             req_counter.next();
         }
     };
-    fu_attr.callback = [&do_work] (Future* fu) {
+    fu_attr.callback = [&do_work] (rusty::Arc<Future> fu) {
         if (fu->get_error_code() != 0) {
             return;
         }

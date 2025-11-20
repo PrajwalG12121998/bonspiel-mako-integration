@@ -126,14 +126,14 @@ using namespace std;
 //    auto do_work = [cl, &fu_attr, rpc_id, &last_time] {
 //        if (!should_stop) {
 //            clock_gettime(CLOCK_REALTIME, &last_time);
-//            Future* fu = cl->begin_request(rpc_id, fu_attr);
+//            rusty::Arc<Future> fu = cl->begin_request(rpc_id, fu_attr);
 //            *cl << request_str;
 //            cl->end_request();
-//            Future::safe_release(fu);
+//            // Arc auto-released
 //            req_counter.next();
 //        }
 //    };
-//    fu_attr.callback = [&do_work, &last_time, cid] (Future* fu) {
+//    fu_attr.callback = [&do_work, &last_time, cid] (rusty::Arc<Future> fu) {
 //        if (fu->get_error_code() != 0) {
 //            return;
 //        }

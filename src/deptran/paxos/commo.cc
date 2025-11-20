@@ -129,7 +129,7 @@ void MultiPaxosCommo::ForwardToLearner(parid_t par_id,
     if (Config::GetConfig()->SiteById(p.first).role!=2) continue; 
      auto proxy = (MultiPaxosProxy*) p.second;
      FutureAttr fuattr;
-     fuattr.callback = [/*e, */cb] (Future* fu) {
+     fuattr.callback = [/*e, */cb] (rusty::Arc<Future> fu) {
         if (fu->get_error_code()!=0) {
           Log_info("received an error message6");
           return;
@@ -143,8 +143,8 @@ void MultiPaxosCommo::ForwardToLearner(parid_t par_id,
         //e->FeedResponse(1);
       };
      MarshallDeputy md(cmd);
-     auto f = proxy->async_ForwardToLearnerServer(par_id, slot, ballot, md, fuattr);
-     Future::safe_release(f);
+     auto fu_result = proxy->async_ForwardToLearnerServer(par_id, slot, ballot, md, fuattr);
+     // Arc auto-released
 
     // auto p = proxies.at(cur_batch_idx*(Config::GetConfig()->GetPartitionSize(par_id)) + i);
     // if (Config::GetConfig()->SiteById(p.first).role!=2) continue; 
@@ -268,7 +268,7 @@ MultiPaxosCommo::BroadcastHeartBeat(parid_t par_id,
     if (Config::GetConfig()->SiteById(p.first).role==2) continue; 
     auto proxy = (MultiPaxosProxy*) p.second;
     FutureAttr fuattr;
-    fuattr.callback = [e, cb] (Future* fu) {
+    fuattr.callback = [e, cb] (rusty::Arc<Future> fu) {
       if (fu->get_error_code()!=0) {
         Log_info("received an error message5");
         return;
@@ -281,8 +281,8 @@ MultiPaxosCommo::BroadcastHeartBeat(parid_t par_id,
     };
     verify(cmd != nullptr);
     MarshallDeputy md(cmd);
-    auto f = proxy->async_Heartbeat(md, fuattr);
-    Future::safe_release(f);
+    auto fu_result = proxy->async_Heartbeat(md, fuattr);
+    // Arc auto-released
   }
   return e;
 }
@@ -307,7 +307,7 @@ MultiPaxosCommo::BroadcastSyncLog(parid_t par_id,
     if (Config::GetConfig()->SiteById(p.first).role==0) continue;
     auto proxy = (MultiPaxosProxy*) p.second;
     FutureAttr fuattr;
-    fuattr.callback = [e, cb] (Future* fu) {
+    fuattr.callback = [e, cb] (rusty::Arc<Future> fu) {
       if (fu->get_error_code()!=0) {
         Log_info("received an error message3");
         return;
@@ -322,8 +322,8 @@ MultiPaxosCommo::BroadcastSyncLog(parid_t par_id,
     };
     verify(cmd != nullptr);
     MarshallDeputy md(cmd);
-    auto f = proxy->async_SyncLog(md, fuattr);
-    Future::safe_release(f);
+    auto fu_result = proxy->async_SyncLog(md, fuattr);
+    // Arc auto-released
   }
   return e;
 }
@@ -346,7 +346,7 @@ MultiPaxosCommo::BroadcastSyncNoOps(parid_t par_id,
     if (Config::GetConfig()->SiteById(p.first).role==0) continue; // ??? why skip itself
     auto proxy = (MultiPaxosProxy*) p.second;
     FutureAttr fuattr;
-    fuattr.callback = [e, cb] (Future* fu) {
+    fuattr.callback = [e, cb] (rusty::Arc<Future> fu) {
       if (fu->get_error_code()!=0) {
         Log_info("received an error message4");
         return;
@@ -359,8 +359,8 @@ MultiPaxosCommo::BroadcastSyncNoOps(parid_t par_id,
     };
     verify(cmd != nullptr);
     MarshallDeputy md(cmd);
-    auto f = proxy->async_SyncNoOps(md, fuattr);
-    Future::safe_release(f);
+    auto fu_result = proxy->async_SyncNoOps(md, fuattr);
+    // Arc auto-released
   }
   return e;
 }
@@ -417,7 +417,7 @@ MultiPaxosCommo::BroadcastBulkAccept(parid_t par_id,
     auto proxy = (MultiPaxosProxy*) p.second;  // a Proxy pool for the concurrent request
     FutureAttr fuattr;
     int st = p.first;
-    fuattr.callback = [e, cb, st] (Future* fu) {
+    fuattr.callback = [e, cb, st] (rusty::Arc<Future> fu) {
       if (fu->get_error_code()!=0) {
         Log_info("received an error message2");
         return;
@@ -433,8 +433,8 @@ MultiPaxosCommo::BroadcastBulkAccept(parid_t par_id,
     };
     verify(cmd != nullptr);
     MarshallDeputy md(cmd);
-    auto f = proxy->async_BulkAccept(md, fuattr);
-    Future::safe_release(f);
+    auto fu_result = proxy->async_BulkAccept(md, fuattr);
+    // Arc auto-released
   }
   return e;
 }
@@ -456,7 +456,7 @@ MultiPaxosCommo::BroadcastBulkDecide(parid_t par_id,
     if (Config::GetConfig()->SiteById(p.first).role==2) continue;
     auto proxy = (MultiPaxosProxy*) p.second;
     FutureAttr fuattr;
-    fuattr.callback = [e, cb] (Future* fu) {
+    fuattr.callback = [e, cb] (rusty::Arc<Future> fu) {
       if (fu->get_error_code()!=0) {
         Log_info("received an error message");
         return;
@@ -468,8 +468,8 @@ MultiPaxosCommo::BroadcastBulkDecide(parid_t par_id,
       e->FeedResponse(valid);
     };
     MarshallDeputy md(cmd);
-    auto f = proxy->async_BulkDecide(md, fuattr);
-    Future::safe_release(f);
+    auto fu_result = proxy->async_BulkDecide(md, fuattr);
+    // Arc auto-released
   }
   return e;
 }

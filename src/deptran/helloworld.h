@@ -10,7 +10,7 @@ namespace helloworld_client {
 class HelloworldClientService: public rrr::Service {
 public:
     enum {
-        TXN_READ = 0x6291a0b7,
+        TXN_READ = 0x5d097a6b,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -51,24 +51,27 @@ protected:
     rrr::Client* __cl__;
 public:
     HelloworldClientProxy(rrr::Client* cl): __cl__(cl) { }
-    rrr::Future* async_txn_read(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(HelloworldClientService::TXN_READ, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_read(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(HelloworldClientService::TXN_READ, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_read(const std::vector<rrr::i64>& _req, rrr::i32* val) {
-        rrr::Future* __fu__ = this->async_txn_read(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_read(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
         if (__ret__ == 0) {
             __fu__->get_reply() >> *val;
         }
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
 };

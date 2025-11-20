@@ -10,13 +10,13 @@ namespace network_client {
 class NetworkClientService: public rrr::Service {
 public:
     enum {
-        TXN_RMW = 0x669a1fd7,
-        TXN_READ = 0x4f41d4b6,
-        TXN_NEW_ORDER = 0x6496b84d,
-        TXN_PAYMENT = 0x10430b25,
-        TXN_DELIVERY = 0x2777e272,
-        TXN_ORDER_STATUS = 0x404124e9,
-        TXN_STOCK_LEVEL = 0x6102d27d,
+        TXN_RMW = 0x5803e914,
+        TXN_READ = 0x55a152ee,
+        TXN_NEW_ORDER = 0x2515fa94,
+        TXN_PAYMENT = 0x5b03a8b7,
+        TXN_DELIVERY = 0x6eaeb656,
+        TXN_ORDER_STATUS = 0x3586b330,
+        TXN_STOCK_LEVEL = 0x6765e44d,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -174,123 +174,144 @@ protected:
     rrr::Client* __cl__;
 public:
     NetworkClientProxy(rrr::Client* cl): __cl__(cl) { }
-    rrr::Future* async_txn_rmw(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_RMW, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_rmw(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_RMW, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_rmw(const std::vector<rrr::i64>& _req) {
-        rrr::Future* __fu__ = this->async_txn_rmw(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_rmw(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_read(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_READ, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_read(const std::vector<rrr::i64>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_READ, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_read(const std::vector<rrr::i64>& _req) {
-        rrr::Future* __fu__ = this->async_txn_read(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_read(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_new_order(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_NEW_ORDER, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_new_order(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_NEW_ORDER, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_new_order(const std::vector<int32_t>& _req) {
-        rrr::Future* __fu__ = this->async_txn_new_order(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_new_order(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_payment(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_PAYMENT, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_payment(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_PAYMENT, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_payment(const std::vector<int32_t>& _req) {
-        rrr::Future* __fu__ = this->async_txn_payment(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_payment(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_delivery(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_DELIVERY, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_delivery(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_DELIVERY, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_delivery(const std::vector<int32_t>& _req) {
-        rrr::Future* __fu__ = this->async_txn_delivery(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_delivery(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_order_status(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_ORDER_STATUS, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_order_status(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_ORDER_STATUS, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_order_status(const std::vector<int32_t>& _req) {
-        rrr::Future* __fu__ = this->async_txn_order_status(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_order_status(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_txn_stock_level(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(NetworkClientService::TXN_STOCK_LEVEL, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << _req;
+    rrr::FutureResult async_txn_stock_level(const std::vector<int32_t>& _req, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(NetworkClientService::TXN_STOCK_LEVEL, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << _req;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 txn_stock_level(const std::vector<int32_t>& _req) {
-        rrr::Future* __fu__ = this->async_txn_stock_level(_req);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_txn_stock_level(_req);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
 };

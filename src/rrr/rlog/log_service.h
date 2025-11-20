@@ -10,8 +10,8 @@ namespace rlog {
 class RLogService: public rrr::Service {
 public:
     enum {
-        LOG = 0x3d1e2eb1,
-        AGGREGATE_QPS = 0x4ad318da,
+        LOG = 0x11c8d44d,
+        AGGREGATE_QPS = 0x5678549c,
     };
     int __reg_to__(rrr::Server* svr) {
         int ret = 0;
@@ -71,42 +71,48 @@ protected:
     rrr::Client* __cl__;
 public:
     RLogProxy(rrr::Client* cl): __cl__(cl) { }
-    rrr::Future* async_log(const rrr::i32& level, const std::string& source, const rrr::i64& msg_id, const std::string& message, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(RLogService::LOG, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << level;
-            *__cl__ << source;
-            *__cl__ << msg_id;
-            *__cl__ << message;
+    rrr::FutureResult async_log(const rrr::i32& level, const std::string& source, const rrr::i64& msg_id, const std::string& message, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(RLogService::LOG, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << level;
+        *__cl__ << source;
+        *__cl__ << msg_id;
+        *__cl__ << message;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 log(const rrr::i32& level, const std::string& source, const rrr::i64& msg_id, const std::string& message) {
-        rrr::Future* __fu__ = this->async_log(level, source, msg_id, message);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_log(level, source, msg_id, message);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
-    rrr::Future* async_aggregate_qps(const std::string& metric_name, const rrr::i32& increment, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
-        rrr::Future* __fu__ = __cl__->begin_request(RLogService::AGGREGATE_QPS, __fu_attr__);
-        if (__fu__ != nullptr) {
-            *__cl__ << metric_name;
-            *__cl__ << increment;
+    rrr::FutureResult async_aggregate_qps(const std::string& metric_name, const rrr::i32& increment, const rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {
+        auto __fu_result__ = __cl__->begin_request(RLogService::AGGREGATE_QPS, __fu_attr__);
+        if (__fu_result__.is_err()) {
+            return __fu_result__;  // Propagate error
         }
+        auto __fu__ = __fu_result__.unwrap();
+        *__cl__ << metric_name;
+        *__cl__ << increment;
         __cl__->end_request();
-        return __fu__;
+        return rrr::FutureResult::Ok(__fu__);
     }
     rrr::i32 aggregate_qps(const std::string& metric_name, const rrr::i32& increment) {
-        rrr::Future* __fu__ = this->async_aggregate_qps(metric_name, increment);
-        if (__fu__ == nullptr) {
-            return ENOTCONN;
+        auto __fu_result__ = this->async_aggregate_qps(metric_name, increment);
+        if (__fu_result__.is_err()) {
+            return __fu_result__.unwrap_err();  // Return error code
         }
+        auto __fu__ = __fu_result__.unwrap();
         rrr::i32 __ret__ = __fu__->get_error_code();
-        __fu__->release();
+        // Arc auto-released
         return __ret__;
     }
 };

@@ -180,25 +180,31 @@ def emit_service_and_proxy(service, f, rpc_table):
                     sync_func_params += "%s* out_%d" % (out_arg.type, out_counter),
                     sync_out_params += "out_%d" % out_counter,
                 out_counter += 1
-            f.writeln("rrr::Future* async_%s(%sconst rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {" % (func.name, ", ".join(async_func_params + [""])))
+            f.writeln("rrr::FutureResult async_%s(%sconst rrr::FutureAttr& __fu_attr__ = rrr::FutureAttr()) {" % (func.name, ", ".join(async_func_params + [""])))
             with f.indent():
-                f.writeln("rrr::Future* __fu__ = __cl__->begin_request(%sService::%s, __fu_attr__);" % (service.name, func.name.upper()))
+                f.writeln("auto __fu_result__ = __cl__->begin_request(%sService::%s, __fu_attr__);" % (service.name, func.name.upper()))
                 if len(async_call_params) > 0:
-                    f.writeln("if (__fu__ != nullptr) {")
+                    f.writeln("if (__fu_result__.is_err()) {")
                     with f.indent():
-                        for param in async_call_params:
-                            f.writeln("*__cl__ << %s;" % param)
+                        f.writeln("return __fu_result__;  // Propagate error")
                     f.writeln("}")
+                    f.writeln("auto __fu__ = __fu_result__.unwrap();")
+                    for param in async_call_params:
+                        f.writeln("*__cl__ << %s;" % param)
                 f.writeln("__cl__->end_request();")
-                f.writeln("return __fu__;")
+                if len(async_call_params) > 0:
+                    f.writeln("return rrr::FutureResult::Ok(__fu__);")
+                else:
+                    f.writeln("return __fu_result__;")
             f.writeln("}")
             f.writeln("rrr::i32 %s(%s) {" % (func.name, ", ".join(sync_func_params)))
             with f.indent():
-                f.writeln("rrr::Future* __fu__ = this->async_%s(%s);" % (func.name, ", ".join(async_call_params)))
-                f.writeln("if (__fu__ == nullptr) {")
+                f.writeln("auto __fu_result__ = this->async_%s(%s);" % (func.name, ", ".join(async_call_params)))
+                f.writeln("if (__fu_result__.is_err()) {")
                 with f.indent():
-                    f.writeln("return ENOTCONN;")
+                    f.writeln("return __fu_result__.unwrap_err();  // Return error code")
                 f.writeln("}")
+                f.writeln("auto __fu__ = __fu_result__.unwrap();")
                 f.writeln("rrr::i32 __ret__ = __fu__->get_error_code();")
                 if len(sync_out_params) > 0:
                     f.writeln("if (__ret__ == 0) {")
@@ -206,7 +212,7 @@ def emit_service_and_proxy(service, f, rpc_table):
                         for param in sync_out_params:
                             f.writeln("__fu__->get_reply() >> *%s;" % param)
                     f.writeln("}")
-                f.writeln("__fu__->release();")
+                f.writeln("// Arc auto-released")
                 f.writeln("return __ret__;")
             f.writeln("}")
     f.writeln("};")

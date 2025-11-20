@@ -253,11 +253,12 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
     Debug("RrrRpcBackend::SendToShard: Got client, calling begin_request");
 
     // Begin request with rrr/rpc
-    rrr::Future* fu = client->begin_request(req_type);
-    if (!fu) {
+    auto fu_result = client->begin_request(req_type);
+    if (fu_result.is_err()) {
         Warning("Failed to begin_request for req_type %d", req_type);
         return false;
     }
+    auto fu = fu_result.unwrap();
 
     Debug("RrrRpcBackend::SendToShard: begin_request succeeded, writing request data");
 
@@ -286,21 +287,18 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
     // Check stop again after wait - client might have been closed during wait
     if (stop_) {
         Warning("RrrRpcBackend::SendToShard: stop requested after wait, aborting");
-        rrr::Future::safe_release(fu);
-        return false;
+        return false;  // Arc auto-released
     }
 
     if (fu->get_error_code() != 0) {
         Warning("RPC error: %d", fu->get_error_code());
-        rrr::Future::safe_release(fu);
-        return false;
+        return false;  // Arc auto-released
     }
 
     // Final check before accessing response - make sure we're not stopping
     if (stop_) {
         Warning("RrrRpcBackend::SendToShard: stop requested before processing response, aborting");
-        rrr::Future::safe_release(fu);
-        return false;
+        return false;  // Arc auto-released
     }
 
     // Read response
@@ -313,7 +311,7 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
         src->ReceiveResponse(req_type, resp_buffer.data());
     }
 
-    rrr::Future::safe_release(fu);
+    // Arc auto-released when fu goes out of scope
     return !stop_;
 }
 
@@ -337,7 +335,7 @@ bool RrrRpcBackend::SendToAll(TransportReceiver* src,
     if (!shards_bit_set) return true;
 
     // Prepare futures for all shards
-    std::vector<rrr::Future*> futures;
+    std::vector<rusty::Arc<rrr::Future>> futures;
 
     for (int shard_idx = 0; shard_idx < config_.nshards; shard_idx++) {
         if ((shards_bit_set >> shard_idx) % 2 == 0) continue;
@@ -352,11 +350,12 @@ bool RrrRpcBackend::SendToAll(TransportReceiver* src,
 
         Debug("RrrRpcBackend::SendToAll: Got client for shard %d, calling begin_request", shard_idx);
 
-        rrr::Future* fu = client->begin_request(req_type);
-        if (!fu) {
+        auto fu_result = client->begin_request(req_type);
+        if (fu_result.is_err()) {
             Warning("Failed to begin_request for shard %d", shard_idx);
             continue;
         }
+        auto fu = fu_result.unwrap();
 
         // Write request data using client's << operator
         rrr::Marshal m;
@@ -369,18 +368,17 @@ bool RrrRpcBackend::SendToAll(TransportReceiver* src,
         Debug("RrrRpcBackend::SendToAll: Calling end_request for shard %d", shard_idx);
 
         client->end_request();
-        futures.push_back(fu);
+        futures.push_back(std::move(fu));
     }
 
     Debug("RrrRpcBackend::SendToAll: Sent to %zu shards, waiting for responses", futures.size());
 
     // Wait for all responses
-    for (rrr::Future* fu : futures) {
+    for (auto& fu : futures) {
         // Check if stop was requested before waiting
         if (stop_) {
             Warning("RrrRpcBackend::SendToAll: stop requested, aborting wait for response (req_type=%d)", req_type);
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         // Wait for response with timeout, checking stop flag periodically
@@ -393,14 +391,12 @@ bool RrrRpcBackend::SendToAll(TransportReceiver* src,
         // Check stop again after wait
         if (stop_) {
             Warning("RrrRpcBackend::SendToAll: stop requested after wait, aborting (req_type=%d)", req_type);
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         if (fu->get_error_code() != 0) {
             Warning("RPC error: %d", fu->get_error_code());
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         // Read response
@@ -413,9 +409,10 @@ bool RrrRpcBackend::SendToAll(TransportReceiver* src,
             src->ReceiveResponse(req_type, resp_buffer.data());
         }
 
-        rrr::Future::safe_release(fu);
+        // Arc auto-released at end of loop iteration
     }
 
+    // All Arcs auto-released when futures vector destroyed
     return !stop_;
 }
 
@@ -431,7 +428,7 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
         return false;
     }
 
-    std::vector<rrr::Future*> futures;
+    std::vector<rusty::Arc<rrr::Future>> futures;
 
     for (auto& entry : data) {
         int shard_idx = entry.first;
@@ -441,8 +438,9 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
         rusty::Arc<rrr::Client> client = GetOrCreateClient(shard_idx, server_id);
         if (!client.is_valid()) continue;
 
-        rrr::Future* fu = client->begin_request(req_type);
-        if (!fu) continue;
+        auto fu_result = client->begin_request(req_type);
+        if (fu_result.is_err()) continue;
+        auto fu = fu_result.unwrap();
 
         // Write request data using client's << operator
         rrr::Marshal m;
@@ -453,16 +451,15 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
         msg_counter_req_sent_ += 1;
 
         client->end_request();
-        futures.push_back(fu);
+        futures.push_back(std::move(fu));
     }
 
     // Wait for all responses
-    for (rrr::Future* fu : futures) {
+    for (auto& fu : futures) {
         // Check if stop was requested before waiting
         if (stop_) {
             Warning("RrrRpcBackend::SendBatchToAll: stop requested, aborting wait (req_type=%d)", req_type);
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         // Wait for response with timeout, checking stop flag periodically
@@ -475,14 +472,12 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
         // Check stop again after wait
         if (stop_) {
             Warning("RrrRpcBackend::SendBatchToAll: stop requested after wait, aborting (req_type=%d)", req_type);
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         if (fu->get_error_code() != 0) {
             Warning("RPC error: %d", fu->get_error_code());
-            rrr::Future::safe_release(fu);
-            continue;
+            continue;  // Arc auto-released
         }
 
         // Read response
@@ -495,9 +490,10 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
             src->ReceiveResponse(req_type, resp_buffer.data());
         }
 
-        rrr::Future::safe_release(fu);
+        // Arc auto-released at end of loop iteration
     }
 
+    // All Arcs auto-released when futures vector destroyed
     return !stop_;
 }
 

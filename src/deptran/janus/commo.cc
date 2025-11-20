@@ -13,8 +13,8 @@ void JanusCommo::SendDispatch(vector<TxPieceData>& cmd,
   rrr::FutureAttr fuattr;
   auto tid = cmd[0].root_id_;
   auto par_id = cmd[0].partition_id_;
-  std::function<void(Future*)> cb =
-      [callback, tid, par_id](Future* fu) {
+  std::function<void(rusty::Arc<Future>)> cb =
+      [callback, tid, par_id](rusty::Arc<Future> fu) {
         int res;
         TxnOutput output;
         MarshallDeputy md;
@@ -39,7 +39,8 @@ void JanusCommo::SendDispatch(vector<TxPieceData>& cmd,
   Log_debug("dispatch to %ld", cmd[0].PartitionId());
 //  verify(cmd.type_ > 0);
 //  verify(cmd.root_type_ > 0);
-  Future::safe_release(proxy->async_JanusDispatch(cmd, fuattr));
+  auto fu_result = proxy->async_JanusDispatch(cmd, fuattr);
+  // Arc auto-released
 }
 
 void JanusCommo::SendHandoutRo(SimpleCommand& cmd,
@@ -55,7 +56,7 @@ void JanusCommo::SendInquire(parid_t pid,
                              txnid_t tid,
                              const function<void(RccGraph& graph)>& callback) {
   FutureAttr fuattr;
-  function<void(Future*)> cb = [callback](Future* fu) {
+  function<void(rusty::Arc<Future>)> cb = [callback](rusty::Arc<Future> fu) {
     MarshallDeputy md;
     fu->get_reply() >> md;
     // Arc returns const reference, use const_cast for mutation
@@ -65,7 +66,8 @@ void JanusCommo::SendInquire(parid_t pid,
   fuattr.callback = cb;
   // TODO fix.
   auto proxy = NearestProxyForPartition(pid).second;
-  Future::safe_release(proxy->async_JanusInquire(epoch, tid, fuattr));
+  auto fu_result = proxy->async_JanusInquire(epoch, tid, fuattr);
+  // Arc auto-released
 }
 
 
@@ -84,7 +86,7 @@ void JanusCommo::BroadcastPreAccept(
     auto proxy = (p.second);
     verify(proxy != nullptr);
     FutureAttr fuattr;
-    fuattr.callback = [callback](Future* fu) {
+    fuattr.callback = [callback](rusty::Arc<Future> fu) {
       int32_t res;
       MarshallDeputy md;
       fu->get_reply() >> res >> md;
@@ -95,16 +97,16 @@ void JanusCommo::BroadcastPreAccept(
       callback(res, sp);
     };
     verify(txn_id > 0);
-    Future* f = nullptr;
     if (skip_graph) {
-      f = proxy->async_JanusPreAcceptWoGraph(txn_id, RANK_UNDEFINED, cmds, fuattr);
+      auto fu_result = proxy->async_JanusPreAcceptWoGraph(txn_id, RANK_UNDEFINED, cmds, fuattr);
+      // Arc auto-released
     } else {
       // Use shared_ptr directly for MarshallDeputy
       auto sp_graph_copy = std::make_shared<RccGraph>(*sp_graph);
       MarshallDeputy md(sp_graph_copy);
-      f = proxy->async_JanusPreAccept(txn_id, RANK_UNDEFINED, cmds, md, fuattr);
+      auto fu_result = proxy->async_JanusPreAccept(txn_id, RANK_UNDEFINED, cmds, md, fuattr);
+      // Arc auto-released
     }
-    Future::safe_release(f);
   }
 }
 
@@ -118,7 +120,7 @@ void JanusCommo::BroadcastAccept(parid_t par_id,
     auto proxy = (p.second);
     verify(proxy != nullptr);
     FutureAttr fuattr;
-    fuattr.callback = [callback](Future* fu) {
+    fuattr.callback = [callback](rusty::Arc<Future> fu) {
       int32_t res;
       fu->get_reply() >> res;
       callback(res);
@@ -127,10 +129,11 @@ void JanusCommo::BroadcastAccept(parid_t par_id,
     // Use shared_ptr directly for MarshallDeputy
     auto sp_graph = std::make_shared<RccGraph>(*graph);
     MarshallDeputy md(sp_graph);
-    Future::safe_release(proxy->async_JanusAccept(cmd_id,
-                                                  ballot,
-                                                  md,
-                                                  fuattr));
+    auto fu_result = proxy->async_JanusAccept(cmd_id,
+                                              ballot,
+                                              md,
+                                              fuattr);
+    // Arc auto-released
   }
 }
 
@@ -148,7 +151,7 @@ void JanusCommo::BroadcastCommit(
     auto proxy = (p.second);
     verify(proxy != nullptr);
     FutureAttr fuattr;
-    fuattr.callback = [callback](Future* fu) {
+    fuattr.callback = [callback](rusty::Arc<Future> fu) {
       int32_t res;
       TxnOutput output;
       fu->get_reply() >> res >> output;
@@ -156,14 +159,14 @@ void JanusCommo::BroadcastCommit(
     };
     verify(cmd_id > 0);
     if (skip_graph) {
-      Future::safe_release(
-          proxy->async_JanusCommitWoGraph(cmd_id, 0, need_validation, fuattr));
+      auto fu_result = proxy->async_JanusCommitWoGraph(cmd_id, 0, need_validation, fuattr);
+      // Arc auto-released
     } else {
       // Use shared_ptr directly for MarshallDeputy
       auto sp_graph = std::make_shared<RccGraph>(*graph);
       MarshallDeputy md(sp_graph);
-      Future::safe_release(
-          proxy->async_JanusCommit(cmd_id, 0, need_validation, md, fuattr));
+      auto fu_result = proxy->async_JanusCommit(cmd_id, 0, need_validation, md, fuattr);
+      // Arc auto-released
     }
   }
 }
@@ -173,7 +176,7 @@ shared_ptr<QuorumEvent> JanusCommo::BroadcastInquireValidation(set<parid_t>& par
   for (auto par_id : pars) {
     auto proxy = NearestProxyForPartition(par_id).second;
     FutureAttr fuattr;
-    fuattr.callback = [e](Future* fu) {
+    fuattr.callback = [e](rusty::Arc<Future> fu) {
       int32_t res;
       fu->get_reply() >> res;
       if (res == 1) {
@@ -184,7 +187,8 @@ shared_ptr<QuorumEvent> JanusCommo::BroadcastInquireValidation(set<parid_t>& par
         verify(0);
       }
     };
-    Future::safe_release(proxy->async_RccInquireValidation(txid, fuattr));
+    auto fu_result = proxy->async_RccInquireValidation(txid, fuattr);
+    // Arc auto-released
   }
   return e;
 }
@@ -193,8 +197,9 @@ void JanusCommo::BroadcastNotifyValidation(txid_t txid, set<parid_t>& pars, int3
     for (auto pair : rpc_par_proxies_[par_id]) {
       auto proxy = pair.second;
       FutureAttr fuattr;
-      fuattr.callback = [](Future* fu) {};
-      Future::safe_release(proxy->async_RccNotifyGlobalValidation(txid, result, fuattr));
+      fuattr.callback = [](rusty::Arc<Future> fu) {};
+      auto fu_result = proxy->async_RccNotifyGlobalValidation(txid, result, fuattr);
+      // Arc auto-released
     }
   }
 
