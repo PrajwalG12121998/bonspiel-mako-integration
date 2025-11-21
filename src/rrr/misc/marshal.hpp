@@ -204,7 +204,8 @@ class MarshallDeputy {
 };
 
 class Marshal: public NoCopy {
-  struct raw_bytes: public RefCounted {
+  // Migrated from RefCounted to std::shared_ptr for automatic reference counting
+  struct raw_bytes {
     char *ptr = nullptr;
     size_t size = 0;
     static const size_t min_size;
@@ -247,8 +248,10 @@ class Marshal: public NoCopy {
 
    private:
 
-    chunk(raw_bytes *dt, size_t rd_idx, size_t wr_idx)
-        : data((raw_bytes *) dt->ref_copy()), read_idx(rd_idx),
+    // Private constructor for shared_copy - takes shared_ptr by value, copies it
+    chunk(std::shared_ptr<raw_bytes> dt, size_t rd_idx, size_t wr_idx)
+        : data(dt),  // Copy shared_ptr, increments refcount
+          read_idx(rd_idx),
           write_idx(wr_idx), next(nullptr) {
       assert(write_idx <= data->size);
       assert(read_idx <= write_idx);
@@ -256,23 +259,30 @@ class Marshal: public NoCopy {
 
    public:
 
-    raw_bytes *data;
+    std::shared_ptr<raw_bytes> data;  // Migrated from raw_bytes* to shared_ptr
     size_t read_idx;
     size_t write_idx;
     chunk *next;
 
-    chunk() : data(new raw_bytes), read_idx(0), write_idx(0), next(nullptr) { }
-    chunk(MarshallDeputy md, size_t sz) : data(new raw_bytes(md, sz)), read_idx(0),
-                                           write_idx(sz), next(nullptr){}
+    // Updated constructors to use std::make_shared instead of new
+    chunk() : data(std::make_shared<raw_bytes>()),
+              read_idx(0), write_idx(0), next(nullptr) { }
 
-    chunk(size_t sz) : data(new raw_bytes(sz)), read_idx(0), write_idx(0), next(nullptr){}
+    chunk(MarshallDeputy md, size_t sz)
+        : data(std::make_shared<raw_bytes>(md, sz)),
+          read_idx(0), write_idx(sz), next(nullptr) {}
+
+    chunk(size_t sz)
+        : data(std::make_shared<raw_bytes>(sz)),
+          read_idx(0), write_idx(0), next(nullptr) {}
 
     chunk(const void *p, size_t n)
-        : data(new raw_bytes(p, n)), read_idx(0),
-          write_idx(n), next(nullptr) { }
+        : data(std::make_shared<raw_bytes>(p, n)),
+          read_idx(0), write_idx(n), next(nullptr) { }
     chunk(const chunk&) = delete;
     chunk& operator=(const chunk&) = delete;
-    ~chunk() { data->release(); }
+    // Destructor is now default - shared_ptr handles cleanup automatically
+    ~chunk() = default;
 
     // NOTE: This function is only intended for Marshal::read_from_marshal.
     // @unsafe - Creates a new chunk sharing the same data buffer

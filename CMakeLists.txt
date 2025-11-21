@@ -276,7 +276,8 @@ set(CXXFLAGS
   -I${CMAKE_CURRENT_SOURCE_DIR}/third-party/lz4
   -Isrc
   -I${HOME}
-  -DCONFIG_H=\"${CONFIG_H}\" 
+  -DCONFIG_H=\"${CONFIG_H}\"
+  -DRUSTYCPP_DISABLE_ARC_LOG  # Disable Arc debug logging
 )
 
 if(env STREQUAL "ib")
