@@ -72,7 +72,7 @@ static void* stat_proc(void*) {
 }
 
 static void* client_proc(void*) {
-    Client* cl = new Client(poll_thread_worker_);
+    auto cl = Client::create(poll_thread_worker_);
     verify(cl->connect(svr_addr) == 0);
     FutureAttr fu_attr;
     i32 rpc_id;

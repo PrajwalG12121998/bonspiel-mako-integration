@@ -964,6 +964,13 @@ if(BUILD_TESTS)
     # Integration tests from CI
     add_test(NAME simpleTransaction COMMAND simpleTransaction)
 
+    # RPC benchmark test - starts server, runs client, verifies it works
+    add_test(NAME rpcbench
+        COMMAND bash -c "pkill -9 rpcbench || true; ./build/rpcbench -s 127.0.0.1:8848 > /dev/null 2>&1 & SERVER_PID=$!; sleep 1; ./build/rpcbench -c 127.0.0.1:8848 -n 3 -t 4 -o 100; RESULT=$?; kill $SERVER_PID 2>/dev/null || true; exit $RESULT"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    set_tests_properties(rpcbench PROPERTIES TIMEOUT 30)
+
     # simplePaxos requires config generation and running a shell script that launches multiple processes
     add_test(NAME simplePaxos
         COMMAND bash -c "bash ./src/mako/update_config.sh && bash ./examples/simplePaxos.sh"
@@ -979,7 +986,7 @@ if(BUILD_TESTS)
     # Add a convenience target to run all tests
     add_custom_target(run_tests
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        DEPENDS test_marshal test_rpc test_future test_reactor test_rpc_extended test_reactor_extended simpleTransaction simplePaxos shard1ReplicationSimple  # test_alock removed
+        DEPENDS test_marshal test_rpc test_future test_reactor test_rpc_extended test_reactor_extended rpcbench simpleTransaction simplePaxos shard1ReplicationSimple  # test_alock removed
         COMMENT "Running all RRR tests"
     )
     
@@ -1007,6 +1014,7 @@ if(BUILD_TESTS)
     message(STATUS "  - test_future: Future/async operation tests")
     message(STATUS "  - test_reactor: Reactor/event system tests")
     message(STATUS "  - test_reactor_extended: Extended reactor tests (events, coroutines, load)")
+    message(STATUS "  - rpcbench: RPC performance benchmark test")
     message(STATUS "")
     message(STATUS "Run tests with: make run_tests")
     message(STATUS "Or individually: make test && ctest")
