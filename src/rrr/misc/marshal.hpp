@@ -190,6 +190,11 @@ class MarshallDeputy {
         //Log_info("Written bytes of ghost chunk 1 %d %d %d", sz, kind_, written_to_socket);
         // sp_data_->reset_write_offset();
         // @unsafe {
+        // Safety check: sp_data_ must not be null when writing
+        if (sp_data_ == nullptr) {
+          Log_error("MarshallDeputy::WriteToFd called with null sp_data_ (kind=%d)", kind_);
+          return 0;
+        }
         sz = sp_data_->WriteToFd(fd, written_to_socket - sizeof(kind_));
         // }
 	      //std::cout << sz << std::endl;
@@ -380,6 +385,11 @@ class Marshal: public NoCopy {
       assert(write_idx <= data->size);
       int cnt;
       if(data->shared_data){
+        // Safety check: marshallable_entity must have valid sp_data_
+        if (data->marshallable_entity.sp_data_ == nullptr) {
+          Log_error("chunk::write_to_fd: shared_data=true but marshallable_entity.sp_data_ is null");
+          return -1;
+        }
         cnt = data->marshallable_entity.WriteToFd(fd, data->written_to_socket);
         data->written_to_socket += cnt;
 	//Log_info("wrote %d bytes of ghost %d", cnt, fd);

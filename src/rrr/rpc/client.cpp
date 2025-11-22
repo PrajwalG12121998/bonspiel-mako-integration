@@ -325,7 +325,9 @@ FutureResult Client::begin_request(i32 rpc_id, const FutureAttr& attr /* =... */
     return FutureResult::Err(ENOTCONN);
   }
 
-  *bmark_.borrow_mut() = rusty::Some(rusty::Box<Marshal::bookmark>(out_.borrow_mut()->set_bookmark(sizeof(i32)))); // will fill packet size later
+  // Separate the borrows to avoid overlapping mutable borrows
+  Marshal::bookmark* bm = out_.borrow_mut()->set_bookmark(sizeof(i32)); // will fill packet size later
+  *bmark_.borrow_mut() = rusty::Some(rusty::Box<Marshal::bookmark>(bm));
 
   *this << v64(fu->xid_);
   *this << rpc_id;
