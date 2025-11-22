@@ -60,9 +60,9 @@ class Reactor {
   // Returns thread-local reactor instance with single-threaded Rc
   // SAFETY: Thread-local storage, single-threaded access only
   static rusty::Rc<Reactor> GetReactor();
-  static thread_local rusty::Rc<Reactor> sp_reactor_th_;
+  static thread_local rusty::Option<rusty::Rc<Reactor>> sp_reactor_th_;
   // Thread-local current coroutine with single-threaded Rc
-  static thread_local rusty::Rc<Coroutine> sp_running_coro_th_;
+  static thread_local rusty::Option<rusty::Rc<Coroutine>> sp_running_coro_th_;
   /**
    * A reactor needs to keep reference to all coroutines created,
    * in case it is freed by the caller after a yield.

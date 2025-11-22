@@ -606,7 +606,7 @@ public:
   std::atomic<int> n_submit{0};
   std::atomic<int> n_tot{0};
   SubmitPool* submit_pool = nullptr;
-  rusty::Arc<rrr::PollThreadWorker> svr_poll_thread_worker_;
+  rusty::Option<rusty::Arc<rrr::PollThreadWorker>> svr_poll_thread_worker_;
   vector<rrr::Service*> services_ = {};
   rrr::Server* rpc_server_ = nullptr;
   base::ThreadPool* thread_pool_g = nullptr;
@@ -621,7 +621,7 @@ public:
   int bulk_reader = 0;
 
 
-  rusty::Arc<rrr::PollThreadWorker> svr_hb_poll_thread_worker_g;
+  rusty::Option<rusty::Arc<rrr::PollThreadWorker>> svr_hb_poll_thread_worker_g;
   ServerControlServiceImpl* scsi_ = nullptr;
   rrr::Server* hb_rpc_server_ = nullptr;
   base::ThreadPool* hb_thread_pool_g = nullptr;
@@ -681,7 +681,7 @@ public:
   void register_apply_callback_par_id(std::function<void(const char*&, int, int)>);
   void register_apply_callback_par_id_return(std::function<int(const char*&, int, int, int, std::queue<std::tuple<int, int, int, int, const char *>> &)>);
   rusty::Arc<rrr::PollThreadWorker> GetPollThreadWorker(){
-      return svr_poll_thread_worker_;
+      return svr_poll_thread_worker_.as_ref().unwrap();
   }
 };
 

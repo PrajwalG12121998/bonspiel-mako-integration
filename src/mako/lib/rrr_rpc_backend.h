@@ -178,7 +178,7 @@ private:
     int cluster_role_;
 
     // rrr/rpc state
-    rusty::Arc<rrr::PollThreadWorker> poll_thread_worker_;
+    rusty::Option<rusty::Arc<rrr::PollThreadWorker>> poll_thread_worker_;
     rrr::Server* server_{nullptr};
 
     // Client connections: {(cluster_role, shard_idx, server_id) -> Client}
@@ -205,7 +205,7 @@ private:
     std::mutex rrr_request_map_lock_;
 
     // Internal helper methods
-    rusty::Arc<rrr::Client> GetOrCreateClient(uint8_t shard_idx, uint16_t server_id, int force_center = -1);
+    rusty::Option<rusty::Arc<rrr::Client>> GetOrCreateClient(uint8_t shard_idx, uint16_t server_id, int force_center = -1);
 
     // Static request handler for rrr::Server
     static void RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> req, rrr::WeakServerConnection weak_sconn, RrrRpcBackend* backend);

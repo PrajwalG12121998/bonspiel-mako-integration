@@ -291,7 +291,7 @@ TxData* Frame::CreateTxnCommand(TxRequest& req, shared_ptr<TxnRegistry> reg) {
 //  return CreateTxnCommand(req, reg);
 //}
 
-Communicator* Frame::CreateCommo(rusty::Arc<PollThreadWorker> poll_thread_worker) {
+Communicator* Frame::CreateCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker) {
   commo_ = new Communicator(poll_thread_worker);
   return commo_;
 }

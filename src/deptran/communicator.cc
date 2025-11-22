@@ -10,13 +10,13 @@
 
 namespace janus {
 
-Communicator::Communicator(rusty::Arc<PollThreadWorker> poll_thread_worker) {
+Communicator::Communicator(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker) {
   Log_info("setup paxos communicator");
   vector<string> addrs;
-  if (!poll_thread_worker)
-    rpc_poll_ = PollThreadWorker::create();
+  if (poll_thread_worker.is_none())
+    rpc_poll_ = rusty::Some(PollThreadWorker::create());
   else
-    rpc_poll_ = poll_thread_worker;
+    rpc_poll_ = rusty::Some(poll_thread_worker.as_ref().unwrap().clone());
   auto config = Config::GetConfig();
   // create more client per server
   int proxy_batch_size = 1 ;
@@ -85,8 +85,8 @@ Communicator::~Communicator() {
   rpc_clients_.clear();
 
   // Shutdown PollThreadWorker if we own it
-  if (rpc_poll_) {
-    rpc_poll_->shutdown();
+  if (rpc_poll_.is_some()) {
+    rpc_poll_.as_ref().unwrap()->shutdown();
   }
 }
 
@@ -138,7 +138,7 @@ Communicator::ConnectToClientSite(Config::SiteInfo& site,
   snprintf(addr, sizeof(addr), "%s:%d", site.host.c_str(), site.port);
 
   auto start = std::chrono::steady_clock::now();
-  auto rpc_cli = rrr::Client::create(rpc_poll_);
+  auto rpc_cli = rrr::Client::create(rpc_poll_.as_ref().unwrap());
   double elapsed;
   int attempt = 0;
   do {
@@ -168,7 +168,7 @@ Communicator::ConnectToSite(Config::SiteInfo& site,
                             std::chrono::milliseconds timeout) {
   string addr = site.GetHostAddr();
   auto start = std::chrono::steady_clock::now();
-  auto rpc_cli = rrr::Client::create(rpc_poll_);
+  auto rpc_cli = rrr::Client::create(rpc_poll_.as_ref().unwrap());
   double elapsed;
   int attempt = 0;
   do {

@@ -93,7 +93,7 @@ class Communicator {
  public:
   const int CONNECT_TIMEOUT_MS = 120*1000;
   const int CONNECT_SLEEP_MS = 1000;
-  rusty::Arc<rrr::PollThreadWorker> rpc_poll_;
+  rusty::Option<rusty::Arc<rrr::PollThreadWorker>> rpc_poll_;
   locid_t loc_id_ = -1;
   map<siteid_t, rusty::Arc<rrr::Client>> rpc_clients_{};
   map<siteid_t, ClassicProxy *> rpc_proxies_{};
@@ -103,7 +103,7 @@ class Communicator {
   std::atomic_bool client_leaders_connected_;
   std::vector<std::thread> threads;
 
-  Communicator(rusty::Arc<PollThreadWorker> poll_mgr = rusty::Arc<PollThreadWorker>());
+  Communicator(rusty::Option<rusty::Arc<PollThreadWorker>> poll_mgr = rusty::None);
   virtual ~Communicator();
 
   SiteProxyPair RandomProxyForPartition(parid_t partition_id) const;

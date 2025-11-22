@@ -66,7 +66,7 @@ shared_ptr<Tx> FrameRococo::CreateTx(epoch_t epoch, txnid_t tid,
   return sp_tx;
 }
 
-Communicator *FrameRococo::CreateCommo(rusty::Arc<PollThreadWorker> poll) {
+Communicator *FrameRococo::CreateCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll) {
   return new RccCommo(poll);
 }
 

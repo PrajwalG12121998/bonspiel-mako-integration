@@ -193,7 +193,7 @@ void PaxosWorker::SetupService() {
   if (rep_frame_ != nullptr) {
     services_ = rep_frame_->CreateRpcServices(site_info_->id,
                                               rep_sched_,
-                                              svr_poll_thread_worker_,
+                                              svr_poll_thread_worker_.as_ref().unwrap(),
                                               scsi_);
     Log_info("[service]loc_id: %d, name: %s, proc: %s, id: %d",
       site_info_->locale_id, site_info_->name.c_str(), site_info_->proc_name.c_str(), site_info_->id);
@@ -202,7 +202,7 @@ void PaxosWorker::SetupService() {
   thread_pool_g = new base::ThreadPool(num_threads);
 
   // init rrr::Server
-  rpc_server_ = new rrr::Server(svr_poll_thread_worker_, thread_pool_g);
+  rpc_server_ = new rrr::Server(svr_poll_thread_worker_.as_ref().unwrap(), thread_pool_g);
 
   // reg services
   for (auto service : services_) {
@@ -241,7 +241,7 @@ void PaxosWorker::SetupHeartbeat() {
   scsi_ = new ServerControlServiceImpl(timeout);
   svr_hb_poll_thread_worker_g = PollThreadWorker::create();
   hb_thread_pool_g = new rrr::ThreadPool(1);
-  hb_rpc_server_ = new rrr::Server(svr_hb_poll_thread_worker_g, hb_thread_pool_g);
+  hb_rpc_server_ = new rrr::Server(svr_hb_poll_thread_worker_g.as_ref().unwrap(), hb_thread_pool_g);
   hb_rpc_server_->reg(scsi_);
 
   auto port = site_info_->port + CtrlPortDelta;
@@ -651,11 +651,11 @@ PaxosWorker::~PaxosWorker() {
   stop_replay_flag = true;
 
   // Shutdown PollThreadWorkers if we own them
-  if (svr_poll_thread_worker_) {
-    svr_poll_thread_worker_->shutdown();
+  if (svr_poll_thread_worker_.is_some()) {
+    svr_poll_thread_worker_.as_ref().unwrap()->shutdown();
   }
-  if (svr_hb_poll_thread_worker_g) {
-    svr_hb_poll_thread_worker_g->shutdown();
+  if (svr_hb_poll_thread_worker_g.is_some()) {
+    svr_hb_poll_thread_worker_g.as_ref().unwrap()->shutdown();
   }
 }
 

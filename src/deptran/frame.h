@@ -49,7 +49,7 @@ class Frame {
 
   virtual Executor *CreateExecutor(cmdid_t cmd_id, TxLogServer *sch);
   virtual TxLogServer *CreateScheduler();
-  virtual Communicator *CreateCommo(rusty::Arc<PollThreadWorker> poll_thread_worker = rusty::Arc<PollThreadWorker>());
+  virtual Communicator *CreateCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker = rusty::None);
   // for only dtxn
   Sharding *CreateSharding();
   Sharding *CreateSharding(Sharding *sd);

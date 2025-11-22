@@ -327,7 +327,7 @@ class Server: public NoCopy {
  public:
     using RequestHandler = std::function<void(rusty::Box<Request>, WeakServerConnection)>;
     std::unordered_map<i32, RequestHandler> handlers_;
-    rusty::Arc<PollThreadWorker> poll_thread_worker_;  // Shared ownership via Arc<Mutex<>>
+    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;  // Shared ownership via Arc<Mutex<>>
     ThreadPool* threadpool_;
     int server_sock_;
 
@@ -335,7 +335,7 @@ class Server: public NoCopy {
 
     SpinLock sconns_l_;
     std::unordered_set<rusty::Arc<ServerConnection>> sconns_{};
-    rusty::Arc<ServerListener> sp_server_listener_{};
+    rusty::Option<rusty::Arc<ServerListener>> sp_server_listener_;
 
     enum {
         NEW, RUNNING, STOPPING, STOPPED
@@ -351,7 +351,7 @@ public:
 
     // @unsafe - Creates server with optional PollThreadWorker
     // SAFETY: Shared ownership of PollThreadWorker via Arc<Mutex<>>
-    Server(rusty::Arc<PollThreadWorker> poll_thread_worker = rusty::Arc<PollThreadWorker>(), ThreadPool* thrpool = nullptr);
+    Server(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker = rusty::None, ThreadPool* thrpool = nullptr);
     // @unsafe - Destroys server and all connections
     // SAFETY: Waits for all connections to close
     virtual ~Server();

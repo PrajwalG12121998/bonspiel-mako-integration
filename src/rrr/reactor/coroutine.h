@@ -44,7 +44,8 @@ class Reactor;
 class Coroutine {
  public:
   // Returns current coroutine with single-threaded reference counting
-  static rusty::Rc<Coroutine> CurrentCoroutine();
+  // Returns None if called outside of a coroutine context
+  static rusty::Option<rusty::Rc<Coroutine>> CurrentCoroutine();
   // the argument cannot be a reference because it could be declared on stack.
   // Using std::move_only_function to support move-only callables (e.g., lambdas capturing rusty::Box)
   // Creates and runs coroutine with rusty::Rc ownership

@@ -18,8 +18,8 @@ ClientWorker::~ClientWorker() {
 //  dispatch_pool_->release();
 
   // Shutdown PollThreadWorker if we own it
-  if (poll_thread_worker_) {
-    poll_thread_worker_->shutdown();
+  if (poll_thread_worker_.is_some()) {
+    poll_thread_worker_.as_ref().unwrap()->shutdown();
   }
 }
 
@@ -166,7 +166,7 @@ void ClientWorker::Work() {
     }));
     // Cast OneTimeJob to Job base class for PollThreadWorker
     auto arc_job_base = rusty::Arc<Job>(arc_job);
-    poll_thread_worker_->add(arc_job_base);
+    poll_thread_worker_.as_ref().unwrap()->add(arc_job_base);
   } else {
     Log_info("open loop clients.");
     const std::chrono::nanoseconds wait_time
@@ -185,7 +185,7 @@ void ClientWorker::Work() {
           }));
           // Cast OneTimeJob to Job base class
           auto arc_job_base = rusty::Arc<Job>(arc_job);
-          poll_thread_worker_->add(arc_job_base);
+          poll_thread_worker_.as_ref().unwrap()->add(arc_job_base);
           txn_count++;
           elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>
               (std::chrono::steady_clock::now() - start);
@@ -276,7 +276,7 @@ ClientWorker::ClientWorker(
     Config::SiteInfo& site_info,
     Config* config,
     ClientControlServiceImpl* ccsi,
-    rusty::Arc<PollThreadWorker> poll_thread_worker) :
+    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker) :
     id(id),
     my_site_(site_info),
     config_(config),
@@ -286,14 +286,14 @@ ClientWorker::ClientWorker(
     duration(config->get_duration()),
     ccsi(ccsi),
     n_concurrent_(config->get_concurrent_txn()) {
-  poll_thread_worker_ = !poll_thread_worker ? PollThreadWorker::create() : poll_thread_worker;
+  poll_thread_worker_ = poll_thread_worker.is_some() ? std::move(poll_thread_worker) : rusty::Some(PollThreadWorker::create());
   frame_ = Frame::GetFrame(config->tx_proto_);
   tx_generator_ = frame_->CreateTxGenerator();
   config->get_all_site_addr(servers_);
   num_txn.store(0);
   success.store(0);
   num_try.store(0);
-  commo_ = frame_->CreateCommo(poll_thread_worker_);
+  commo_ = frame_->CreateCommo(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
   commo_->loc_id_ = my_site_.locale_id;
   forward_requests_to_leader_ =
       (config->replica_proto_ == MODE_MULTI_PAXOS && site_info.locale_id != 0) ? true

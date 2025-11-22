@@ -13,15 +13,17 @@
 
 namespace rrr {
 
-thread_local rusty::Rc<Reactor> Reactor::sp_reactor_th_{};
-thread_local rusty::Rc<Coroutine> Reactor::sp_running_coro_th_{};
+thread_local rusty::Option<rusty::Rc<Reactor>> Reactor::sp_reactor_th_{};
+thread_local rusty::Option<rusty::Rc<Coroutine>> Reactor::sp_running_coro_th_{};
 
-// @safe - Returns current coroutine with single-threaded reference counting
+// @unsafe - Returns current coroutine with single-threaded reference counting
 // SAFETY: Returns copy of thread-local Rc - single-threaded, no synchronization needed
-rusty::Rc<Coroutine> Coroutine::CurrentCoroutine() {
-  // TODO re-enable this verify
-//  verify(sp_running_coro_th_);
-  return Reactor::sp_running_coro_th_.clone();
+// Returns None if called outside of a coroutine context
+rusty::Option<rusty::Rc<Coroutine>> Coroutine::CurrentCoroutine() {
+  if (Reactor::sp_running_coro_th_.is_none()) {
+    return rusty::None;
+  }
+  return rusty::Some(Reactor::sp_running_coro_th_.as_ref().unwrap().clone());
 }
 
 // @safe - Creates and runs a new coroutine with rusty::Rc ownership
@@ -39,13 +41,13 @@ Coroutine::CreateRun(std::move_only_function<void()> func) {
 // SAFETY: Thread-local storage with Rc ensures single-threaded access
 rusty::Rc<Reactor>
 Reactor::GetReactor() {
-  if (!sp_reactor_th_) {
+  if (sp_reactor_th_.is_none()) {
     Log_debug("create a coroutine scheduler");
-    sp_reactor_th_ = rusty::Rc<Reactor>::make();  // In-place construction
-    // Use get_mut() to initialize thread_id_ - safe because we just created it
-    const_cast<Reactor&>(*sp_reactor_th_).thread_id_ = std::this_thread::get_id();
+    sp_reactor_th_ = rusty::Some(rusty::Rc<Reactor>::make());  // In-place construction
+    // Use as_ref() to borrow, then initialize thread_id_ - safe because we just created it
+    const_cast<Reactor&>(*sp_reactor_th_.as_ref().unwrap()).thread_id_ = std::this_thread::get_id();
   }
-  return sp_reactor_th_.clone();
+  return sp_reactor_th_.as_ref().unwrap().clone();
 }
 
 /**
@@ -56,30 +58,32 @@ Reactor::GetReactor() {
 // SAFETY: Proper lifecycle management with Rc, single-threaded execution
 rusty::Rc<Coroutine>
 Reactor::CreateRunCoroutine(std::move_only_function<void()> func) const {
-  rusty::Rc<Coroutine> sp_coro;
+  rusty::Option<rusty::Rc<Coroutine>> sp_coro;
   if (REUSING_CORO && available_coros_.size() > 0) {
     //Log_info("Reusing stuff");
-    sp_coro = available_coros_.back().clone();
+    sp_coro = rusty::Some(available_coros_.back().clone());
     available_coros_.pop_back();
     // Rc provides const access, use const_cast to modify (safe: single-threaded)
-    auto& coro = const_cast<Coroutine&>(*sp_coro);
+    auto& coro = const_cast<Coroutine&>(*sp_coro.as_ref().unwrap());
     coro.func_ = std::move(func);
     // Reset boost_coro_task_ when reusing a recycled coroutine for a new function
     coro.boost_coro_task_ = rusty::None;
     coro.status_ = Coroutine::INIT;
   } else {
-    sp_coro = rusty::Rc<Coroutine>::make(std::move(func));
+    sp_coro = rusty::Some(rusty::Rc<Coroutine>::make(std::move(func)));
   }
 
-  // Save old coroutine context
-  auto sp_old_coro = sp_running_coro_th_;
-  sp_running_coro_th_ = sp_coro;
+  // Save old coroutine context - clone to avoid moving
+  auto sp_old_coro = sp_running_coro_th_.is_some()
+    ? rusty::Some(sp_running_coro_th_.as_ref().unwrap().clone())
+    : rusty::Option<rusty::Rc<Coroutine>>{};
+  sp_running_coro_th_ = rusty::Some(sp_coro.as_ref().unwrap().clone());
 
-  if (!sp_coro) {
+  if (sp_coro.is_none()) {
     Log_error("[DEBUG] CreateRunCoroutine: sp_coro is null!");
   }
-  verify(sp_coro);
-  auto pair = coros_.insert(sp_coro);
+  verify(sp_coro.is_some());
+  auto pair = coros_.insert(sp_coro.as_ref().unwrap().clone());
   if (!pair.second) {
     Log_error("[DEBUG] CreateRunCoroutine: Failed to insert coroutine into coros_ set!");
     Log_error("[DEBUG] coros_ size before insert: %zu", coros_.size());
@@ -88,16 +92,16 @@ Reactor::CreateRunCoroutine(std::move_only_function<void()> func) const {
   verify(pair.second);
   verify(coros_.size() > 0);
 
-  sp_coro->Run();
-  if (sp_coro->Finished()) {
-    coros_.erase(sp_coro);
+  sp_coro.as_ref().unwrap()->Run();
+  if (sp_coro.as_ref().unwrap()->Finished()) {
+    coros_.erase(sp_coro.as_ref().unwrap().clone());
   }
 
   Loop();
 
   // yielded or finished, reset to old coro.
   sp_running_coro_th_ = sp_old_coro;
-  return sp_coro;
+  return sp_coro.as_ref().unwrap().clone();
 }
 
 // @safe - Checks timeout events and moves ready ones to ready list with std::shared_ptr
@@ -196,23 +200,26 @@ void Reactor::Loop(bool infinite) const {
 // @safe - Continues execution of paused coroutine with rusty::Rc
 // SAFETY: Manages coroutine state transitions properly, single-threaded Rc
 void Reactor::ContinueCoro(rusty::Rc<Coroutine> sp_coro) const {
-//  verify(!sp_running_coro_th_); // disallow nested coros
-  auto sp_old_coro = sp_running_coro_th_.clone();
-  sp_running_coro_th_ = sp_coro.clone();
-  verify(!sp_running_coro_th_->Finished());
+//  verify(!sp_running_coro_th_.is_none()); // disallow nested coros
+  // Clone to avoid moving - must preserve the old value
+  auto sp_old_coro = sp_running_coro_th_.is_some()
+    ? rusty::Some(sp_running_coro_th_.as_ref().unwrap().clone())
+    : rusty::Option<rusty::Rc<Coroutine>>{};
+  sp_running_coro_th_ = rusty::Some(sp_coro.clone());
+  verify(!sp_running_coro_th_.as_ref().unwrap()->Finished());
   if (sp_coro->status_ == Coroutine::INIT) {
     sp_coro->Run();
   } else {
     // PAUSED or RECYCLED
-    sp_running_coro_th_->Continue();
+    sp_running_coro_th_.as_ref().unwrap()->Continue();
   }
-  if (sp_running_coro_th_->Finished()) {
+  if (sp_running_coro_th_.as_ref().unwrap()->Finished()) {
     if (REUSING_CORO) {
       // Rc provides const access, use const_cast to modify (safe: single-threaded)
       const_cast<Coroutine&>(*sp_coro).status_ = Coroutine::RECYCLED;
-      available_coros_.push_back(sp_running_coro_th_);
+      available_coros_.push_back(sp_running_coro_th_.as_ref().unwrap().clone());
     }
-    coros_.erase(sp_running_coro_th_);
+    coros_.erase(sp_running_coro_th_.as_ref().unwrap().clone());
   }
   sp_running_coro_th_ = sp_old_coro;
 }
@@ -416,7 +423,7 @@ void PollThreadWorker::add(rusty::Arc<Pollable> sp_poll) const{
   }
 
   // Store in map
-  fd_to_pollable_[fd] = sp_poll.clone();
+  fd_to_pollable_.insert_or_assign(fd, sp_poll.clone());
   mode_[fd] = poll_mode;
 
   // userdata = raw Pollable* for lookup (safe - kept alive by fd_to_pollable_ map)

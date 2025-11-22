@@ -68,7 +68,7 @@ TxLogServer *MultiPaxosFrame::CreateScheduler() {
   return sch;
 }
 
-Communicator *MultiPaxosFrame::CreateCommo(rusty::Arc<PollThreadWorker> poll) {
+Communicator *MultiPaxosFrame::CreateCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll) {
   // We only have 1 instance of MultiPaxosFrame object that is returned from
   // GetFrame method. MultiPaxosCommo currently seems ok to share among the
   // clients of this method.

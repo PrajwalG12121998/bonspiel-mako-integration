@@ -9,7 +9,7 @@
 
 namespace janus {
 
-MultiPaxosCommo::MultiPaxosCommo(rusty::Arc<PollThreadWorker> poll)
+MultiPaxosCommo::MultiPaxosCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll)
   : Communicator(poll) {
 }
 

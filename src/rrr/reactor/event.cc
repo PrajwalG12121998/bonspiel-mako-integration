@@ -37,8 +37,8 @@ using std::function;
 
 void Event::Wait(uint64_t timeout) {
 //  verify(__debug_creator); // if this fails, the event is not created by reactor.
-  verify(Reactor::sp_reactor_th_);
-  verify(Reactor::sp_reactor_th_->thread_id_ == std::this_thread::get_id());
+  verify(Reactor::sp_reactor_th_.is_some());
+  verify(Reactor::sp_reactor_th_.as_ref().unwrap()->thread_id_ == std::this_thread::get_id());
   if (status_ == DONE) return; // TODO: yidawu add for the second use the event.
   // verify(status_ == INIT);
   if (IsReady()) {
@@ -54,8 +54,9 @@ void Event::Wait(uint64_t timeout) {
     // the event may be created in a different coroutine.
     // this value is set when wait is called.
     // for now only one coroutine can wait on an event.
-    auto sp_coro = Coroutine::CurrentCoroutine();
-    verify(sp_coro);
+    auto sp_coro_opt = Coroutine::CurrentCoroutine();
+    verify(sp_coro_opt.is_some());  // Can't wait outside a coroutine
+    auto sp_coro = sp_coro_opt.unwrap();
 
     // Rc gives const access, use const_cast for mutation (safe: thread-local)
     auto reactor_rc = Reactor::GetReactor();
@@ -114,9 +115,13 @@ bool Event::Test() {
 }
 
 Event::Event() {
-  auto coro = Coroutine::CurrentCoroutine();
-//  verify(coro);
-  wp_coro_ = coro;
+  auto coro_opt = Coroutine::CurrentCoroutine();
+  // It's OK if no coroutine is running - event might be created outside a coroutine
+  // and Wait() called later from within one
+  if (coro_opt.is_some()) {
+    wp_coro_ = coro_opt.unwrap();
+  }
+  // Otherwise wp_coro_ stays as default empty weak pointer
 }
 
 bool IntEvent::TestTrigger() {

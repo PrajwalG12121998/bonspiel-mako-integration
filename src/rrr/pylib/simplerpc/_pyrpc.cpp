@@ -20,8 +20,7 @@ using namespace rrr;
 struct PollThreadWorkerWrapper {
     rusty::Arc<PollThreadWorker> arc;
 
-    PollThreadWorkerWrapper() {
-        arc = PollThreadWorker::create();
+    PollThreadWorkerWrapper() : arc(PollThreadWorker::create()) {
     }
 };
 

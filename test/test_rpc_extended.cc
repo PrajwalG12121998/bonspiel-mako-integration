@@ -73,7 +73,7 @@ public:
 
 class ExtendedRPCTest : public ::testing::Test {
 protected:
-    rusty::Arc<PollThreadWorker> poll_thread_worker_;
+    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
     Server* server;
     ExtendedTestService* service;
     static constexpr int test_port_base = 9000;
@@ -84,10 +84,10 @@ protected:
         current_port = test_port_base + port_offset++;
 
         // Create PollThreadWorker Arc<Mutex<>>
-        poll_thread_worker_ = PollThreadWorker::create();
+        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
 
-        // Server now takes Arc<Mutex<>>
-        server = new Server(poll_thread_worker_);
+        // Server now takes Option<Arc<...>> - use as_ref() to borrow and clone
+        server = new Server(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
         service = new ExtendedTestService();
         server->reg(service);
         ASSERT_EQ(server->start(("0.0.0.0:" + std::to_string(current_port)).c_str()), 0);
@@ -98,7 +98,7 @@ protected:
         if (server) delete server;
         // Shutdown PollThreadWorker with proper locking
         {
-            poll_thread_worker_->shutdown();
+            poll_thread_worker_.as_ref().unwrap()->shutdown();
         }
     }
 };
@@ -112,7 +112,7 @@ TEST_F(ExtendedRPCTest, MultipleClients) {
 
     // Create multiple clients
     for (int i = 0; i < num_clients; i++) {
-        auto client = Client::create(poll_thread_worker_);
+        auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
         ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
         clients.push_back(client);
     }
@@ -147,7 +147,7 @@ TEST_F(ExtendedRPCTest, MultipleClients) {
 
 // Test 2: Client reconnection after disconnect
 TEST_F(ExtendedRPCTest, ClientReconnection) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     // Make initial request
@@ -169,7 +169,7 @@ TEST_F(ExtendedRPCTest, ClientReconnection) {
     std::this_thread::sleep_for(milliseconds(100));
 
     // Create new client for reconnection
-    client = Client::create(poll_thread_worker_);
+    client = Client::create(poll_thread_worker_.as_ref().unwrap());
 
     // Reconnect
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
@@ -193,7 +193,7 @@ TEST_F(ExtendedRPCTest, ClientReconnection) {
 
 // Test 3: Request timeout handling
 TEST_F(ExtendedRPCTest, RequestTimeout) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     // Set service to delay longer than timeout
@@ -228,7 +228,7 @@ TEST_F(ExtendedRPCTest, RapidConnectDisconnect) {
     const int num_cycles = 20;
 
     for (int i = 0; i < num_cycles; i++) {
-        auto client = Client::create(poll_thread_worker_);
+        auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
         ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
         // Make a quick request
@@ -254,7 +254,7 @@ TEST_F(ExtendedRPCTest, RapidConnectDisconnect) {
 
 // Test 5: Mixed payload sizes
 TEST_F(ExtendedRPCTest, MixedPayloadSizes) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     std::vector<int> sizes = {1, 10, 100, 1000, 10000, 100000, 1000000};
@@ -284,7 +284,7 @@ TEST_F(ExtendedRPCTest, MixedPayloadSizes) {
 
 // Test 6: Burst traffic pattern
 TEST_F(ExtendedRPCTest, BurstTraffic) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     const int burst_size = 100;
@@ -330,7 +330,7 @@ TEST_F(ExtendedRPCTest, BurstTraffic) {
 
 // Test 7: Interleaved request types
 TEST_F(ExtendedRPCTest, InterleavedRequestTypes) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     std::vector<rusty::Arc<Future>> futures;
@@ -395,7 +395,7 @@ TEST_F(ExtendedRPCTest, InterleavedRequestTypes) {
 
 // Test 8: Pipelined requests (send multiple before waiting)
 TEST_F(ExtendedRPCTest, PipelinedRequests) {
-    auto client = Client::create(poll_thread_worker_);
+    auto client = Client::create(poll_thread_worker_.as_ref().unwrap());
     ASSERT_EQ(client->connect(("127.0.0.1:" + std::to_string(current_port)).c_str()), 0);
 
     const int pipeline_depth = 50;

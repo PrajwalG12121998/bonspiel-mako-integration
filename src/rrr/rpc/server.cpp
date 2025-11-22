@@ -159,7 +159,7 @@ void ServerConnection::end_reply() {
     // only update poll mode if connection is still active
     // (connection might have closed while handler was running)
     if (status_ == CONNECTED) {
-        server_->poll_thread_worker_->update_mode(*this, Pollable::READ | Pollable::WRITE);
+        server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ | Pollable::WRITE);
     }
 
     out_l_.unlock();
@@ -290,7 +290,7 @@ void ServerConnection::handle_write() {
     out_l_.lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
-        server_->poll_thread_worker_->update_mode(*this, Pollable::READ);
+        server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ);
     }
     out_l_.unlock();
 }
@@ -307,20 +307,20 @@ void ServerConnection::close() {
         server_->sconns_l_.lock();
 
         // Find our Arc in server's connection set
-        rusty::Arc<ServerConnection> self;
+        rusty::Option<rusty::Arc<ServerConnection>> self;
         for (auto it = server_->sconns_.begin(); it != server_->sconns_.end(); ++it) {
             if (it->get() == this) {
-                self = it->clone();
+                self = rusty::Some(it->clone());
                 server_->sconns_.erase(it);
                 break;
             }
         }
         server_->sconns_l_.unlock();
 
-        if (self) {
+        if (self.is_some()) {
             // Arc gives const access, need to cast to call remove()
-            auto& conn = const_cast<ServerConnection&>(*self);
-            server_->poll_thread_worker_->remove(conn);
+            auto& conn = const_cast<ServerConnection&>(*self.unwrap());
+            server_->poll_thread_worker_.as_ref().unwrap()->remove(conn);
             status_ = CLOSED;
             ::close(socket_);
             Log_debug("server@%s close ServerConnection at fd=%d", server_->addr_.c_str(), socket_);
@@ -341,16 +341,16 @@ int ServerConnection::poll_mode() const {
 
 // @unsafe - Constructs server with PollThreadWorker
 // SAFETY: Shared ownership via Arc<Mutex<>>, creates one if not provided
-Server::Server(rusty::Arc<PollThreadWorker> poll_thread_worker /* =... */, ThreadPool* thrpool /* =? */)
+Server::Server(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker /* =... */, ThreadPool* thrpool /* =? */)
         : server_sock_(-1), status_(NEW) {
 
     // get rid of eclipse warning
     memset(&loop_th_, 0, sizeof(loop_th_));
 
-    if (!poll_thread_worker) {  // Check if Arc<Mutex<>> is empty
-        poll_thread_worker_ = PollThreadWorker::create();
+    if (poll_thread_worker.is_none()) {  // Check if Option is None
+        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
     } else {
-        poll_thread_worker_ = poll_thread_worker;
+        poll_thread_worker_ = std::move(poll_thread_worker);
     }
 
 //    if (thrpool == nullptr) {
@@ -385,14 +385,14 @@ Server::~Server() {
     for (auto& it: sconns) {
         auto& conn = const_cast<ServerConnection&>(*it);
         conn.close();
-        poll_thread_worker_->remove(conn);
+        poll_thread_worker_.as_ref().unwrap()->remove(conn);
     }
 
-    if (sp_server_listener_) {
-        auto& listener = const_cast<ServerListener&>(*sp_server_listener_);
+    if (sp_server_listener_.is_some()) {
+        auto& listener = const_cast<ServerListener&>(*sp_server_listener_.as_ref().unwrap());
         listener.close();
-        poll_thread_worker_->remove(listener);
-        sp_server_listener_ = rusty::Arc<ServerListener>();  // Reset to empty Arc
+        poll_thread_worker_.as_ref().unwrap()->remove(listener);
+        sp_server_listener_ = rusty::None;  // Reset to None
     }
 
     // Now clear sconns_ and the local copy to release Arcs
@@ -482,7 +482,7 @@ void Server::server_loop(struct addrinfo* svr_addr) {
             const_cast<ServerConnection&>(*sconn).weak_self_ = sconn;  // Initialize weak to self
             sconns_.insert(sconn.clone());  // Insert Arc into set
             sconns_l_.unlock();
-            poll_thread_worker_->add(sconn);
+            poll_thread_worker_.as_ref().unwrap()->add(sconn);
         }
     }
 
@@ -516,7 +516,7 @@ void ServerListener::handle_read() {
       server_->sconns_l_.lock();
       server_->sconns_.insert(sconn.clone());  // Insert Arc into set
       server_->sconns_l_.unlock();
-      server_->poll_thread_worker_->add(sconn);
+      server_->poll_thread_worker_.as_ref().unwrap()->add(sconn);
     } else {
       break;
     }
@@ -654,8 +654,8 @@ int Server::start(const char* bind_addr) {
     return -1;
   }
   string addr(bind_addr, strlen(bind_addr));
-  sp_server_listener_ = rusty::Arc<ServerListener>::make(this, addr);
-  poll_thread_worker_->add(sp_server_listener_);
+  sp_server_listener_ = rusty::Some(rusty::Arc<ServerListener>::make(this, addr));
+  poll_thread_worker_.as_ref().unwrap()->add(sp_server_listener_.as_ref().unwrap().clone());
   return 0;
 }
 

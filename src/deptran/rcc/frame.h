@@ -29,7 +29,7 @@ class FrameRococo : public Frame {
   shared_ptr<Tx> CreateTx(epoch_t epoch, txnid_t tid,
                           bool ro, TxLogServer *mgr) override;
 
-  Communicator *CreateCommo(rusty::Arc<PollThreadWorker> poll = rusty::Arc<PollThreadWorker>()) override;
+  Communicator *CreateCommo(rusty::Option<rusty::Arc<PollThreadWorker>> poll = rusty::None) override;
 
 };
 } // namespace janus
