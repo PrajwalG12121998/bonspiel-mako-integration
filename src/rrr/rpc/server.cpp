@@ -159,7 +159,13 @@ void ServerConnection::end_reply() {
     // only update poll mode if connection is still active
     // (connection might have closed while handler was running)
     if (status_ == CONNECTED) {
-        server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ | Pollable::WRITE);
+        if (worker() != nullptr) {
+            // Use direct path via stored worker reference
+            worker()->update_mode(*this, Pollable::READ | Pollable::WRITE);
+        } else {
+            // Fallback to channel-based update (worker reference not yet set)
+            server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ | Pollable::WRITE);
+        }
     }
 
     out_l_.unlock();
@@ -290,7 +296,13 @@ void ServerConnection::handle_write() {
     out_l_.lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
-        server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ);
+        if (worker() != nullptr) {
+            // Use direct path via stored worker reference
+            worker()->update_mode(*this, Pollable::READ);
+        } else {
+            // Fallback to channel-based update (worker reference not yet set)
+            server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ);
+        }
     }
     out_l_.unlock();
 }
@@ -339,16 +351,16 @@ int ServerConnection::poll_mode() const {
     return mode;
 }
 
-// @unsafe - Constructs server with PollThreadWorker
+// @unsafe - Constructs server with PollThread
 // SAFETY: Shared ownership via Arc<Mutex<>>, creates one if not provided
-Server::Server(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker /* =... */, ThreadPool* thrpool /* =? */)
+Server::Server(rusty::Option<rusty::Arc<PollThread>> poll_thread_worker /* =... */, ThreadPool* thrpool /* =? */)
         : server_sock_(-1), status_(NEW) {
 
     // get rid of eclipse warning
     memset(&loop_th_, 0, sizeof(loop_th_));
 
     if (poll_thread_worker.is_none()) {  // Check if Option is None
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        poll_thread_worker_ = rusty::Some(PollThread::create());
     } else {
         poll_thread_worker_ = std::move(poll_thread_worker);
     }
@@ -412,7 +424,7 @@ Server::~Server() {
             Log_debug("waiting for %d alive connections to shutdown", new_alive_connection_count);
         }
         alive_connection_count = new_alive_connection_count;
-        // sleep 0.05 sec because this is the timeout for PollThreadWorker's epoll()
+        // sleep 0.05 sec because this is the timeout for PollThread's epoll()
         usleep(50 * 1000);
     }
     verify(sconns_ctr_.peek_next() == 0);

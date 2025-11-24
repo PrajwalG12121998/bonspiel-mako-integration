@@ -29,7 +29,7 @@ int worker_threads = 16;
 int rpc_bench_vector_size = 0;
 
 static string request_str;
-rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
+rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;
 ThreadPool* thrpool;
 
 Counter req_counter;
@@ -91,11 +91,11 @@ static void* client_proc(void*) {
                 return;
             }
             auto fu = fu_result.unwrap();
-            if (rpc_id == BenchmarkService::FAST_NOP) {
+            if (rpc_id == BenchmarkService::FAST_NOP || rpc_id == BenchmarkService::NOP) {
                 *cl << request_str;
             } else if (rpc_id == BenchmarkService::FAST_VEC) {
                 *cl << rpc_bench_vector_size;
-            };
+            }
             cl->end_request();
             // Arc auto-released
             req_counter.next();
@@ -198,8 +198,8 @@ int main(int argc, char **argv) {
 
     request_str = string(byte_size, 'x');
 
-    // Create PollThreadWorker Arc<Mutex<>>
-    poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+    // Create PollThread Arc<Mutex<>>
+    poll_thread_worker_ = rusty::Some(PollThread::create());
 
     thrpool = new ThreadPool(worker_threads);
     if (is_server) {
@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
         delete[] client_th;
     }
 
-    // Shutdown PollThreadWorker with proper locking
+    // Shutdown PollThread with proper locking
     {
         poll_thread_worker_.as_ref().unwrap()->shutdown();
     }

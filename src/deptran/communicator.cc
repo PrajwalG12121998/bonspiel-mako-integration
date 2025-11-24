@@ -10,11 +10,11 @@
 
 namespace janus {
 
-Communicator::Communicator(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker) {
+Communicator::Communicator(rusty::Option<rusty::Arc<PollThread>> poll_thread_worker) {
   Log_info("setup paxos communicator");
   vector<string> addrs;
   if (poll_thread_worker.is_none())
-    rpc_poll_ = rusty::Some(PollThreadWorker::create());
+    rpc_poll_ = rusty::Some(PollThread::create());
   else
     rpc_poll_ = rusty::Some(poll_thread_worker.as_ref().unwrap().clone());
   auto config = Config::GetConfig();
@@ -84,7 +84,7 @@ Communicator::~Communicator() {
   }
   rpc_clients_.clear();
 
-  // Shutdown PollThreadWorker if we own it
+  // Shutdown PollThread if we own it
   if (rpc_poll_.is_some()) {
     rpc_poll_.as_ref().unwrap()->shutdown();
   }

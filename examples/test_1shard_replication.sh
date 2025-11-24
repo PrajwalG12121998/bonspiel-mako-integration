@@ -13,7 +13,6 @@ echo "========================================="
 trd=${1:-6}
 script_name="$(basename "$0")"
 ps aux | grep -i dbtest | awk "{print \$2}" | xargs kill -9 2>/dev/null
-ps aux | grep -i simplePaxos | awk "{print \$2}" | xargs kill -9 2>/dev/null
 # Clean up old log files
 rm -f nfs_sync_*
 USERNAME=${USER:-unknown}

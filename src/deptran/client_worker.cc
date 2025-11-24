@@ -17,7 +17,7 @@ ClientWorker::~ClientWorker() {
   }
 //  dispatch_pool_->release();
 
-  // Shutdown PollThreadWorker if we own it
+  // Shutdown PollThread if we own it
   if (poll_thread_worker_.is_some()) {
     poll_thread_worker_.as_ref().unwrap()->shutdown();
   }
@@ -164,7 +164,7 @@ void ClientWorker::Work() {
         this->DispatchRequest(coo);
       }
     }));
-    // Cast OneTimeJob to Job base class for PollThreadWorker
+    // Cast OneTimeJob to Job base class for PollThread
     auto arc_job_base = rusty::Arc<Job>(arc_job);
     poll_thread_worker_.as_ref().unwrap()->add(arc_job_base);
   } else {
@@ -276,7 +276,7 @@ ClientWorker::ClientWorker(
     Config::SiteInfo& site_info,
     Config* config,
     ClientControlServiceImpl* ccsi,
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker) :
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker) :
     id(id),
     my_site_(site_info),
     config_(config),
@@ -286,7 +286,7 @@ ClientWorker::ClientWorker(
     duration(config->get_duration()),
     ccsi(ccsi),
     n_concurrent_(config->get_concurrent_txn()) {
-  poll_thread_worker_ = poll_thread_worker.is_some() ? std::move(poll_thread_worker) : rusty::Some(PollThreadWorker::create());
+  poll_thread_worker_ = poll_thread_worker.is_some() ? std::move(poll_thread_worker) : rusty::Some(PollThread::create());
   frame_ = Frame::GetFrame(config->tx_proto_);
   tx_generator_ = frame_->CreateTxGenerator();
   config->get_all_site_addr(servers_);

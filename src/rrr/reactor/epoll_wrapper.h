@@ -4,6 +4,8 @@
 #pragma once
 
 #include "base/all.hpp"
+#include <rusty/rc.hpp>
+#include <rusty/rc/weak.hpp>
 #include <unistd.h>
 #include <array>
 #include <cerrno>
@@ -21,7 +23,11 @@
 
 namespace rrr {
 
-// @safe - Abstract interface for pollable file descriptors
+// Forward declaration
+class PollThreadWorker;
+
+// @unsafe - Abstract interface for pollable file descriptors
+// (has mutable field for interior mutability, handle_* methods are unsafe)
 class Pollable {
 public:
     virtual ~Pollable() {}
@@ -30,9 +36,9 @@ public:
         READ = 0x1, WRITE = 0x2
     };
 
-    // @safe - Returns file descriptor
+    // Returns file descriptor
     virtual int fd() const = 0;
-    // @safe - Returns current poll mode (READ/WRITE flags)
+    // Returns current poll mode (READ/WRITE flags)
     virtual int poll_mode() const = 0;
     // @unsafe - Handles read events (implementation-specific)
     virtual void handle_read() = 0;
@@ -40,6 +46,25 @@ public:
     virtual void handle_write() = 0;
     // @unsafe - Handles error events (implementation-specific)
     virtual void handle_error() = 0;
+
+    // Worker reference for direct update_mode calls (set when added to worker)
+    // Uses Weak<Rc<PollThreadWorker>> to avoid preventing worker destruction
+    void set_worker(rusty::rc::Weak<PollThreadWorker> worker) const { worker_ = std::move(worker); }
+
+    // Returns raw pointer to worker if still alive, nullptr otherwise
+    // The returned pointer is valid for the duration of the poll loop iteration
+    PollThreadWorker* worker() const {
+        auto rc = worker_.upgrade();
+        if (rc.is_some()) {
+            // Safe: worker is guaranteed to outlive the poll loop iteration
+            return const_cast<PollThreadWorker*>(rc.unwrap().get());
+        }
+        return nullptr;
+    }
+
+protected:
+    // Mutable to allow setting through const Arc access (interior mutability)
+    mutable rusty::rc::Weak<PollThreadWorker> worker_{};
 };
 
 
@@ -262,6 +287,12 @@ class Epoll {
     for (int i = 0; i < nev; i++) {
       //Log_info("number of events are %d", nev);
       void* userdata = evlist[i].data.ptr;
+
+      // Skip if userdata is nullptr (used for internal wakeup events like channel eventfd)
+      if (userdata == nullptr) {
+        continue;
+      }
+
       Pollable* poll = reinterpret_cast<Pollable*>(userdata);  // Direct cast - safe!
 
       if (evlist[i].events & EPOLLIN) {
@@ -283,6 +314,9 @@ class Epoll {
       close(poll_fd_);
     }
   }
+
+  // Public accessor for the epoll/kqueue file descriptor
+  int fd() const { return poll_fd_; }
 
  private:
   int poll_fd_;

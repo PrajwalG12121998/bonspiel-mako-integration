@@ -100,14 +100,14 @@ public:
 
 class ReactorTest : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;
 
     void SetUp() override {
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        poll_thread_worker_ = rusty::Some(PollThread::create());
     }
 
     void TearDown() override {
-        // Shutdown PollThreadWorker with proper locking
+        // Shutdown PollThread with proper locking
         {
             poll_thread_worker_.as_ref().unwrap()->shutdown();
         }
@@ -124,9 +124,9 @@ protected:
     }
 };
 
-TEST_F(ReactorTest, BasicPollThreadWorkerCreation) {
+TEST_F(ReactorTest, BasicPollThreadCreation) {
     EXPECT_TRUE(poll_thread_worker_.is_some());
-    // PollThreadWorker now always uses a single thread (n_threads_ member removed)
+    // PollThread now always uses a single thread (n_threads_ member removed)
 }
 
 TEST_F(ReactorTest, AddRemoveFd) {
@@ -138,10 +138,16 @@ TEST_F(ReactorTest, AddRemoveFd) {
         poll_thread_worker_.as_ref().unwrap()->add(p);
     }
 
+    // Allow worker thread time to process the add command via channel
+    std::this_thread::sleep_for(milliseconds(50));
+
     {
         Pollable& pollable_ref = const_cast<Pollable&>(static_cast<const Pollable&>(*p));
         poll_thread_worker_.as_ref().unwrap()->remove(pollable_ref);
     }
+
+    // Allow worker thread time to process the remove command
+    std::this_thread::sleep_for(milliseconds(50));
 
     close(fd1);
     close(fd2);
@@ -312,6 +318,9 @@ TEST_F(ReactorTest, ErrorHandling) {
         poll_thread_worker_.as_ref().unwrap()->add(p);
     }
 
+    // Allow worker thread time to process the add command via channel
+    std::this_thread::sleep_for(milliseconds(50));
+
     // Close the other end to trigger error/hangup
     close(fd2);
 
@@ -444,6 +453,9 @@ TEST_F(ReactorTest, StressTest) {
         pollables.push_back(p);
     }
 
+    // Allow worker thread time to process all add commands via channel
+    std::this_thread::sleep_for(milliseconds(100));
+
     // Send multiple events
     for (int i = 0; i < events_per_fd; i++) {
         for (auto& [fd1, fd2] : socket_pairs) {
@@ -473,9 +485,9 @@ TEST_F(ReactorTest, StressTest) {
 
 // Test for Issue #1: Destructor cleanup order problem
 // This test DEMONSTRATES THE BUG by showing that epoll Remove() is NOT called
-// when PollThreadWorker is destroyed with pollables still registered.
+// when PollThread is destroyed with pollables still registered.
 //
-// BUG (before fix): When PollThreadWorker destructor runs, it:
+// BUG (before fix): When PollThread destructor runs, it:
 // 1. Joins the thread (stops poll_loop)
 // 2. Calls remove() for each pollable
 // 3. remove() adds fds to pending_remove_ queue
@@ -499,7 +511,7 @@ TEST_F(ReactorTest, DestructorCleanupWithoutExplicitRemove) {
     Epoll::remove_count_ = 0;
 
     {
-        auto test_poll_worker = PollThreadWorker::create();
+        auto test_poll_worker = PollThread::create();
 
         // Add pollables WITHOUT explicit remove
         for (auto& [fd1, fd2] : socket_pairs) {
@@ -507,10 +519,13 @@ TEST_F(ReactorTest, DestructorCleanupWithoutExplicitRemove) {
             test_poll_worker->add(p);
         }
 
+        // Allow worker thread time to process the add commands via channel
+        std::this_thread::sleep_for(milliseconds(100));
+
         // Verify no removes happened yet
         EXPECT_EQ(Epoll::remove_count_.load(), 0);
 
-        // Destroy PollThreadWorker WITHOUT calling remove() on pollables
+        // Destroy PollThread WITHOUT calling remove() on pollables
         // With the FIX, the destructor will:
         // 1. Set stop_flag_ = true
         // 2. Call remove() for each pollable (adds to pending_remove_)

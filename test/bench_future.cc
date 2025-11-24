@@ -46,14 +46,14 @@ private:
 
 class FutureBenchmark : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;
     Server* server;
     BenchService* service;
     rusty::Option<rusty::Arc<Client>> client;
     static constexpr int base_port = 8950;
 
     void SetUp() override {
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        poll_thread_worker_ = rusty::Some(PollThread::create());
         // Clone the Arc to keep our copy for the client - use as_ref() to borrow
         server = new Server(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
         service = new BenchService();

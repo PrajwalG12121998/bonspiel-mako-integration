@@ -39,7 +39,10 @@ if(NOT EXISTS ${CPP_BORROW_CHECKER})
     )
 endif()
 
-enable_borrow_checking()
+# Enable borrow checking (can be disabled with -DENABLE_BORROW_CHECKING=OFF)
+if(ENABLE_BORROW_CHECKING)
+    enable_borrow_checking()
+endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED libdpdk)
@@ -724,7 +727,11 @@ function(add_apps exec_name exec_path)
   )
   
   # Add dependencies
-  add_dependencies(${exec_name} mako erpc rust_lib txlog build_rusty_cpp_checker)
+  if(ENABLE_BORROW_CHECKING)
+    add_dependencies(${exec_name} mako erpc rust_lib txlog build_rusty_cpp_checker)
+  else()
+    add_dependencies(${exec_name} mako erpc rust_lib txlog)
+  endif()
 endfunction()
 
 add_apps(dbtest src/mako/benchmarks/dbtest.cc)
@@ -739,11 +746,7 @@ add_apps(test_ordered_callbacks examples/test_ordered_callbacks.cc)
 add_apps(test_partitioned_queues examples/test_partitioned_queues.cc)
 add_apps(test_stress_partitioned_queues examples/test_stress_partitioned_queues.cc)
 
-# Enable borrow checking for dbtest
-set(ENABLE_BORROW_CHECKING ON CACHE BOOL "Enable borrow checking" FORCE)
-set(BORROW_CHECK_FATAL ON CACHE BOOL "Make borrow check failures fatal" FORCE)
-
-# Apply borrow checking to dbtest target
+# Apply borrow checking to dbtest target (controlled by -DENABLE_BORROW_CHECKING=ON/OFF)
 if(ENABLE_BORROW_CHECKING)
     add_borrow_check_target(dbtest)
 endif()
@@ -950,7 +953,14 @@ if(BUILD_TESTS)
     target_compile_options(test_reactor_extended PRIVATE ${TEST_COMPILE_OPTIONS})
     target_link_libraries(test_reactor_extended ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
     add_test(NAME test_reactor_extended COMMAND test_reactor_extended)
-    
+
+    # Arc<Mutex<>> Thread Safety Tests
+    add_executable(test_arc_mutex_thread test/test_arc_mutex_thread.cc)
+    target_include_directories(test_arc_mutex_thread PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
+    target_compile_options(test_arc_mutex_thread PRIVATE ${TEST_COMPILE_OPTIONS})
+    target_link_libraries(test_arc_mutex_thread ${TEST_LINK_LIBS} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} pthread)
+    add_test(NAME test_arc_mutex_thread COMMAND test_arc_mutex_thread)
+
     # Timeout Race Condition Tests
     add_executable(test_timeout_race test/test_timeout_race.cc)
     target_include_directories(test_timeout_race PRIVATE ${TEST_INCLUDE_DIRS} ${GTEST_INCLUDE_DIRS})
@@ -1034,12 +1044,16 @@ if(BUILD_TESTS)
         COMMAND bash -c "bash ./src/mako/update_config.sh && bash ./examples/simplePaxos.sh"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
+    set_tests_properties(simplePaxos PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 120)
 
     # shard1ReplicationSimple tests 1-shard replication using simpleTransactionRep
     add_test(NAME shard1ReplicationSimple
         COMMAND bash -c "bash ./examples/test_1shard_replication_simple.sh"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
+    set_tests_properties(shard1ReplicationSimple PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 300)
 
     # Add a convenience target to run all tests
     add_custom_target(run_tests

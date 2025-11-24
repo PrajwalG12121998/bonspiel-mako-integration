@@ -73,7 +73,7 @@ public:
 
 class ExtendedRPCTest : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;
     Server* server;
     ExtendedTestService* service;
     static constexpr int test_port_base = 9000;
@@ -83,8 +83,8 @@ protected:
     void SetUp() override {
         current_port = test_port_base + port_offset++;
 
-        // Create PollThreadWorker Arc<Mutex<>>
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        // Create PollThread Arc<Mutex<>>
+        poll_thread_worker_ = rusty::Some(PollThread::create());
 
         // Server now takes Option<Arc<...>> - use as_ref() to borrow and clone
         server = new Server(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
@@ -96,7 +96,7 @@ protected:
     void TearDown() override {
         if (service) delete service;
         if (server) delete server;
-        // Shutdown PollThreadWorker with proper locking
+        // Shutdown PollThread with proper locking
         {
             poll_thread_worker_.as_ref().unwrap()->shutdown();
         }

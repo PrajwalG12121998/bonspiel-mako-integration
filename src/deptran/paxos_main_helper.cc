@@ -404,7 +404,7 @@ void submit(const char* log, int len, uint32_t par_id) {
             worker->Submit(log_str.data(),len, par_id);
         }));
         auto arc_job_base = rusty::Arc<Job>(arc_job);
-        worker->GetPollThreadWorker()->add(arc_job_base);
+        worker->GetPollThread()->add(arc_job_base);
         submit_tot++;
     }
 }
@@ -528,7 +528,7 @@ void send_no_ops_to_all_workers(int epoch){
     }
   }));
   auto arc_job_base = rusty::Arc<Job>(arc_job);
-  pxs_workers_g.back()->GetPollThreadWorker()->add(arc_job_base);
+  pxs_workers_g.back()->GetPollThread()->add(arc_job_base);
   es->stuff_after_election_mutex_.lock();
   es->stuff_after_election_cond_.wait(es->stuff_after_election_mutex_);
   es->stuff_after_election_mutex_.unlock();
@@ -551,7 +551,7 @@ void send_sync_logs(int epoch){
   }
  }));
  auto arc_job_base = rusty::Arc<Job>(arc_job);
- pxs_workers_g.back()->GetPollThreadWorker()->add(arc_job_base);
+ pxs_workers_g.back()->GetPollThread()->add(arc_job_base);
  es->stuff_after_election_mutex_.lock();
  es->stuff_after_election_cond_.wait(es->stuff_after_election_mutex_);
  es->stuff_after_election_mutex_.unlock();
@@ -665,7 +665,7 @@ void send_bulk_prep(int send_epoch){
       ess->election_cond.bcast();
   }));
   auto arc_job_base = rusty::Arc<Job>(arc_job);
-  pxs_workers_g.back()->GetPollThreadWorker()->add(arc_job_base);
+  pxs_workers_g.back()->GetPollThread()->add(arc_job_base);
 }
 
 // marker:ansh
@@ -740,14 +740,14 @@ void* heartbeatMonitor(void* arg){
         }
     }));
     auto arc_job_base = rusty::Arc<Job>(arc_job);
-    pxs_workers_g.back()->GetPollThreadWorker()->add(arc_job_base);
+    pxs_workers_g.back()->GetPollThread()->add(arc_job_base);
   }
    pthread_exit(nullptr);
    return nullptr;
 }
 
 void* heartbeatBackground(void* arg) {
-  auto poll_arc = PollThreadWorker::create();
+  auto poll_arc = PollThread::create();
   auto rpc_cli = rrr::Client::create(poll_arc);
   auto site_leader = Config::GetConfig()->LeaderSiteByPartitionId(0);
   // get the leader's host + port
@@ -773,7 +773,7 @@ void* heartbeatBackground(void* arg) {
 
 // between distant datacenters
 void* heartbeatBackground2(void* arg) {
-  auto poll_arc = PollThreadWorker::create();
+  auto poll_arc = PollThread::create();
   auto rpc_cli = rrr::Client::create(poll_arc);
   auto site_leader = Config::GetConfig()->LeaderSiteByPartitionId(0); // tie to the partition0
   // get the leader's host + port
@@ -1107,7 +1107,7 @@ nc_pclock(char *msg, clockid_t cid)
 
 void *nc_start_server(void *input) {
     NetworkClientServiceImpl *impl = new NetworkClientServiceImpl();
-    auto poll_arc = PollThreadWorker::create();
+    auto poll_arc = PollThread::create();
     base::ThreadPool *tp = new base::ThreadPool();  // never use it
     rrr::Server *server = new rrr::Server(poll_arc, tp);
 

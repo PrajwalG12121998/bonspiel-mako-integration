@@ -228,7 +228,13 @@ void Client::handle_write() {
   out_.borrow_mut()->write_to_fd(sock_.get());
   if (out_.borrow()->empty()) {
     //Log_info("Client handle_write setting read mode here...");
-    poll_thread_worker_->update_mode(*this, Pollable::READ);
+    if (worker() != nullptr) {
+      // Use direct path via stored worker reference
+      worker()->update_mode(*this, Pollable::READ);
+    } else {
+      // Fallback to channel-based update (worker reference not yet set)
+      poll_thread_worker_->update_mode(const_cast<Client&>(*this), Pollable::READ);
+    }
   }
   out_l_.get()->unlock();
 }
@@ -349,29 +355,30 @@ void Client::end_request() const {
 
   // always enable write events since the code above gauranteed there
   // will be some data to send
-  //Log_info("Client end_request setting write mode here....");
-  // const_cast needed: Arc gives const access but update_mode() needs non-const reference
+  // NOTE: end_request() is called from user threads, NOT the poll thread.
+  // Must use channel-based update_mode() - the direct worker() path is only safe
+  // for poll handlers (handle_read/handle_write) running on the poll thread.
   poll_thread_worker_->update_mode(const_cast<Client&>(*this), Pollable::READ | Pollable::WRITE);
 
   out_l_.get()->unlock();
 }
 
-// @unsafe - Constructs pool with PollThreadWorker ownership
-// SAFETY: Shared ownership of PollThreadWorker
-ClientPool::ClientPool(rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker /* =? */,
+// @unsafe - Constructs pool with PollThread ownership
+// SAFETY: Shared ownership of PollThread
+ClientPool::ClientPool(rusty::Option<rusty::Arc<PollThread>> poll_thread_worker /* =? */,
                        int parallel_connections /* =? */)
     : parallel_connections_(parallel_connections) {
 
   verify(parallel_connections_ > 0);
   if (poll_thread_worker.is_none()) {
-    poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+    poll_thread_worker_ = rusty::Some(PollThread::create());
   } else {
     poll_thread_worker_ = std::move(poll_thread_worker);
   }
 }
 
 // @unsafe - Destroys pool and all cached connections
-// SAFETY: Closes all clients and releases PollThreadWorker
+// SAFETY: Closes all clients and releases PollThread
 ClientPool::~ClientPool() {
   for (auto& it : cache_) {
     for (auto& client : it.second) {
@@ -379,7 +386,7 @@ ClientPool::~ClientPool() {
     }
   }
 
-  // Shutdown PollThreadWorker if we own it
+  // Shutdown PollThread if we own it
   if (poll_thread_worker_.is_some()) {
     poll_thread_worker_.as_ref().unwrap()->shutdown();
   }

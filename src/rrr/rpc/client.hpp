@@ -163,16 +163,16 @@ public:
 
 // @unsafe - RPC client with socket management and marshaling using Arc
 // SAFETY: Uses mutable SpinLocks for thread-safe interior mutability
-// Client is accessed from multiple threads (main + PollThreadWorker), so SpinLocks provide synchronization
+// Client is accessed from multiple threads (main + PollThread), so SpinLocks provide synchronization
 // MIGRATED: Now uses rusty::Arc<Client> with explicit weak self-reference instead of shared_from_this()
 class Client: public Pollable {
     rusty::RefCell<Marshal> in_;
     rusty::RefCell<Marshal> out_;
 
     /**
-     * Shared Arc to PollThreadWorker - thread-safe access
+     * Shared Arc to PollThread - thread-safe access
      */
-    rusty::Arc<PollThreadWorker> poll_thread_worker_;
+    rusty::Arc<PollThread> poll_thread_worker_;
 
     // Weak self-reference for registration with poll thread worker
     // Initialized by set_weak_self() after Arc creation
@@ -206,7 +206,7 @@ public:
     }
 
 
-    Client(rusty::Arc<PollThreadWorker> poll_thread_worker):
+    Client(rusty::Arc<PollThread> poll_thread_worker):
         in_(),              // Default-constructs RefCell<Marshal>
         out_(),             // Default-constructs RefCell<Marshal>
         poll_thread_worker_(poll_thread_worker),
@@ -222,7 +222,7 @@ public:
     // Factory method to create Client with Arc
     // @unsafe - Returns Arc<Client> with explicit reference counting
     // SAFETY: Arc provides thread-safe reference counting with polymorphism support
-    static rusty::Arc<Client> create(rusty::Arc<PollThreadWorker> poll_thread_worker) {
+    static rusty::Arc<Client> create(rusty::Arc<PollThread> poll_thread_worker) {
         auto client = rusty::Arc<Client>::make(poll_thread_worker);
         // Initialize weak self-reference for poll thread registration
         // weak_self_ is mutable, so no const_cast needed
@@ -306,8 +306,8 @@ public:
 class ClientPool: public NoCopy {
     rrr::Rand rand_;
 
-    // owns a shared reference to PollThreadWorker
-    rusty::Option<rusty::Arc<rrr::PollThreadWorker>> poll_thread_worker_;
+    // owns a shared reference to PollThread
+    rusty::Option<rusty::Arc<rrr::PollThread>> poll_thread_worker_;
 
     // guard cache_
     SpinLock l_;
@@ -318,11 +318,11 @@ class ClientPool: public NoCopy {
 
 public:
 
-    // @safe - Creates pool with optional PollThreadWorker
-    // SAFETY: Shared ownership of PollThreadWorker
-    ClientPool(rusty::Option<rusty::Arc<rrr::PollThreadWorker>> poll_thread_worker = rusty::None, int parallel_connections = 1);
+    // @safe - Creates pool with optional PollThread
+    // SAFETY: Shared ownership of PollThread
+    ClientPool(rusty::Option<rusty::Arc<rrr::PollThread>> poll_thread_worker = rusty::None, int parallel_connections = 1);
     // @safe - Closes all cached connections
-    // SAFETY: Properly releases all clients and PollThreadWorker via Arc
+    // SAFETY: Properly releases all clients and PollThread via Arc
     ~ClientPool();
 
     // return cached client connection

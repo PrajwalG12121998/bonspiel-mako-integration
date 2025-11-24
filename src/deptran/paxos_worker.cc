@@ -189,7 +189,7 @@ int PaxosWorker::Next(int slot_id, shared_ptr<Marshallable> cmd) {
 
 void PaxosWorker::SetupService() {
   std::string bind_addr = site_info_->GetBindAddress();
-  svr_poll_thread_worker_ = PollThreadWorker::create();
+  svr_poll_thread_worker_ = PollThread::create();
   if (rep_frame_ != nullptr) {
     services_ = rep_frame_->CreateRpcServices(site_info_->id,
                                               rep_sched_,
@@ -239,7 +239,7 @@ void PaxosWorker::SetupHeartbeat() {
   if (!hb) return;
   auto timeout = Config::GetConfig()->get_ctrl_timeout();
   scsi_ = new ServerControlServiceImpl(timeout);
-  svr_hb_poll_thread_worker_g = PollThreadWorker::create();
+  svr_hb_poll_thread_worker_g = PollThread::create();
   hb_thread_pool_g = new rrr::ThreadPool(1);
   hb_rpc_server_ = new rrr::Server(svr_hb_poll_thread_worker_g.as_ref().unwrap(), hb_thread_pool_g);
   hb_rpc_server_->reg(scsi_);
@@ -526,7 +526,7 @@ void* PaxosWorker::StartReadAccept(void* arg){
       pw->BulkSubmit(sub);
     }));
     auto arc_job_base = rusty::Arc<Job>(arc_job);
-    pw->GetPollThreadWorker()->add(arc_job_base);
+    pw->GetPollThread()->add(arc_job_base);
     sent += cnt;
     if(sent % 2 == 0)Log_info("Total submits %d", sent);
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -543,7 +543,7 @@ void PaxosWorker::AddAcceptNc(shared_ptr<Coordinator> coord) {
 }
 
 void PaxosWorker::submitJob(rusty::Arc<Job> arc_job){
-	GetPollThreadWorker()->add(arc_job);
+	GetPollThread()->add(arc_job);
 }
 
 void* PaxosWorker::StartReadAcceptNc(void* arg){
@@ -650,7 +650,7 @@ PaxosWorker::~PaxosWorker() {
   stop_flag = true;
   stop_replay_flag = true;
 
-  // Shutdown PollThreadWorkers if we own them
+  // Shutdown PollThreads if we own them
   if (svr_poll_thread_worker_.is_some()) {
     svr_poll_thread_worker_.as_ref().unwrap()->shutdown();
   }

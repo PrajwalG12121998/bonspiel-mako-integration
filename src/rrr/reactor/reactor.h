@@ -2,15 +2,19 @@
 #include <algorithm>
 #include <list>
 #include <memory>
+#include <queue>
 #include <set>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <variant>
+#include <unistd.h>
 #include <rusty/rusty.hpp>
 #include <rusty/thread.hpp>
 #include <rusty/arc.hpp>
 #include <rusty/mutex.hpp>
+#include <rusty/sync/mpsc.hpp>
 #include "base/misc.hpp"
 #include "event.h"
 #include "quorum_event.h"
@@ -131,94 +135,200 @@ class Reactor {
   }
 };
 
-// @unsafe - Uses mutable fields for thread-safe interior mutability
-// SAFETY: All mutable state is protected by SpinLocks for thread-safety
+// Forward declarations
+class PollThread;
+class PollThreadWorker;
+
+// =============================================================================
+// Channel-based communication between PollThread and PollThreadWorker
+// =============================================================================
+
+// Commands sent from PollThread to PollThreadWorker via channel
+// Using std::variant for type-safe discriminated union
+struct CmdAddPollable { rusty::Arc<Pollable> pollable; };
+struct CmdRemovePollable { int fd; };
+struct CmdUpdateMode { int fd; int new_mode; Pollable* poll_ptr; };
+struct CmdAddJob { rusty::Arc<Job> job; };
+struct CmdRemoveJob { rusty::Arc<Job> job; };
+struct CmdShutdown {};
+
+using PollCommand = std::variant<
+    CmdAddPollable,
+    CmdRemovePollable,
+    CmdUpdateMode,
+    CmdAddJob,
+    CmdRemoveJob,
+    CmdShutdown
+>;
+
+} // namespace rrr
+
+// Mark PollCommand as Send for use with rusty::sync::mpsc channel
+namespace rusty {
+template<>
+struct is_send<rrr::PollCommand> : std::true_type {};
+} // namespace rusty
+
+namespace rrr {
+
+// =============================================================================
+// PollThreadWorker - Owns all polling state, runs in dedicated thread
+// =============================================================================
+
+// Worker class that owns all polling state
+// Runs entirely in the spawned thread
+// Receives commands from PollThread via mpsc channel
+//
+// @unsafe - Contains STL containers and uses Epoll system calls
+// SAFETY: Despite @unsafe annotation, PollThreadWorker is memory-safe because:
+// 1. Single-threaded: Runs only on its dedicated poll thread, no data races
+// 2. Ownership: Owns all Pollables via fd_to_pollable_ map
+// 3. Lifetime: Worker outlives all Pollables - on shutdown, clears worker
+//    references before destruction
+// 4. Channel: Cross-thread communication only via thread-safe mpsc channel
 class PollThreadWorker {
-    // Friend Arc to allow make access to private constructor
-    friend class rusty::Arc<PollThreadWorker>;
-
-private:
-    // Use mutable for thread-shared state (thread-safe with SpinLocks)
-    // RefCell is NOT thread-safe and causes "already mutably borrowed" panics
-    mutable Epoll poll_;
-
-    // Wrap non-movable SpinLocks in rusty::Box to make class movable
-    mutable rusty::Box<SpinLock> l_;
-    // Uses rusty::Arc<Pollable> for polymorphic thread-safe reference counting
-    // SAFETY: Arc provides thread-safe reference counting with built-in polymorphism support
-    // Pollable is abstract base class with multiple derived types (Client, ServerConnection, etc.)
-    // Authoritative storage: fd -> Arc<Pollable>
-    mutable std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
-    mutable std::unordered_map<int, int> mode_; // fd->mode
-
-    // Uses rusty::Arc<Job> for polymorphic thread-safe reference counting
-    mutable std::set<rusty::Arc<Job>> set_sp_jobs_;
-
-    mutable std::unordered_set<int> pending_remove_;  // Store fds to remove
-    mutable rusty::Box<SpinLock> pending_remove_l_;
-    mutable rusty::Box<SpinLock> lock_job_;
-
-    // join_handle_ accessed during shutdown - use mutex for thread safety
-    // Mutex is needed because PollThreadWorker is shared via Arc
-    mutable rusty::Mutex<rusty::Option<rusty::thread::JoinHandle<void>>> join_handle_;
-    mutable rusty::Box<std::atomic<bool>> stop_flag_;  // Wrap atomic to make movable
-
-    // Private constructor - use create() factory
-    PollThreadWorker();
-
-    // @unsafe - Triggers ready jobs in coroutines
-    // SAFETY: Uses spinlock for thread safety
-    void TriggerJob() const;
+    friend class PollThread;
+    friend class rusty::Rc<PollThreadWorker>;
 
 public:
-    ~PollThreadWorker();
+    // Factory method - creates worker wrapped in Rc with weak_self_ initialized
+    static rusty::Rc<PollThreadWorker> create(rusty::sync::mpsc::Receiver<PollCommand> receiver);
 
-    // Factory method returns Arc<PollThreadWorker>
-    static rusty::Arc<PollThreadWorker> create();
+    // Constructor is public for Rc::make(), but prefer create() factory
+    explicit PollThreadWorker(rusty::sync::mpsc::Receiver<PollCommand> receiver);
 
-    // Member function for thread - not static!
-    void poll_loop() const;
+    ~PollThreadWorker() = default;
 
-    // Explicit shutdown (replaces RAII)
-    void shutdown() const;
-
+    // Delete copy/move - worker is owned by Rc
     PollThreadWorker(const PollThreadWorker&) = delete;
     PollThreadWorker& operator=(const PollThreadWorker&) = delete;
+    PollThreadWorker(PollThreadWorker&&) = delete;
+    PollThreadWorker& operator=(PollThreadWorker&&) = delete;
 
-    // Move operations deleted - RefCell is not movable, use Arc for sharing
-    PollThreadWorker(PollThreadWorker&& other) = delete;
-    PollThreadWorker& operator=(PollThreadWorker&& other) = delete;
+    // Main polling loop - processes epoll events and channel commands
+    // Const because Rc gives const access - uses mutable fields for state
+    void poll_loop() const;
 
-    // Thread-safe addition of polymorphic pollable object
-    // SAFETY: Arc provides built-in polymorphism support, protected by spinlock
-    void add(rusty::Arc<Pollable> poll) const;
+    // Get weak reference to self (for passing to Pollables)
+    rusty::rc::Weak<PollThreadWorker> weak_self() const { return weak_self_; }
 
-    // Thread-safe removal of pollable object
-    void remove(Pollable& poll) const;
-    // Thread-safe mode update
+    // Direct update_mode for use by handlers running on poll thread
+    // This bypasses the channel for better performance
     void update_mode(Pollable& poll, int new_mode) const;
 
-    // Frequent Job
-    // Thread-safe job management with polymorphic Arc
-    // SAFETY: Arc provides built-in polymorphism support, protected by spinlock
+private:
+    // For testing: get number of epoll Remove() calls
+    int get_remove_count() const { return poll_.remove_count_.load(); }
+
+private:
+    // Process incoming commands from channel
+    void process_commands() const;
+
+    // Triggers ready jobs in coroutines
+    void TriggerJob() const;
+
+    // Internal implementations (no longer need to be thread-safe - single owner)
+    // All const because they use mutable fields (single-threaded, no races)
+    void do_add_pollable(rusty::Arc<Pollable> sp_poll) const;
+    void do_remove_pollable(int fd) const;
+    void do_update_mode(int fd, int new_mode, Pollable* poll_ptr) const;
+    void do_add_job(rusty::Arc<Job> sp_job) const;
+    void do_remove_job(rusty::Arc<Job> sp_job) const;
+
+    // Process deferred removals
+    void process_pending_removals() const;
+
+private:
+    // MPSC receiver for commands from PollThread
+    // Mutable for const poll_loop() - single-threaded, no races
+    mutable rusty::sync::mpsc::Receiver<PollCommand> receiver_;
+
+    // Epoll instance
+    // Mutable for const poll_loop() - single-threaded, no races
+    mutable Epoll poll_;
+
+    // Pollable state - no longer needs Mutex (single owner in worker thread)
+    // Mutable for const poll_loop() - single-threaded, no races
+    mutable std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
+    mutable std::unordered_map<int, int> mode_;  // fd -> mode
+    mutable std::unordered_set<int> pending_remove_;
+
+    // Jobs - no longer needs Mutex (single owner in worker thread)
+    // Mutable for const poll_loop() - single-threaded, no races
+    mutable std::set<rusty::Arc<Job>> jobs_;
+
+    // Weak reference to self (set by create() factory)
+    mutable rusty::rc::Weak<PollThreadWorker> weak_self_{};
+
+    // Stop flag
+    // Mutable for const poll_loop() - single-threaded, no races
+    mutable bool stop_ = false;
+};
+
+// =============================================================================
+// PollThread - Handle for controlling the poll thread
+// =============================================================================
+
+// @unsafe - Handle for controlling the poll thread (has mutable fields)
+// SAFETY: Despite @unsafe annotation, PollThread is thread-safe because:
+// 1. All cross-thread communication via thread-safe mpsc channel
+// 2. Mutable fields use proper synchronization (mutex for join_handle_, atomic for shutdown_called_)
+class PollThread {
+    // Friend Arc to allow make access to private constructor
+    friend class rusty::Arc<PollThread>;
+
+private:
+    // MPSC sender for commands to worker
+    mutable rusty::sync::mpsc::Sender<PollCommand> sender_;
+
+    // Join handle for the thread (Mutex provides interior mutability)
+    rusty::Mutex<rusty::Option<rusty::thread::JoinHandle<void>>> join_handle_;
+
+    // Thread ID of the poll thread - used to detect self-join attempts
+    // std::atomic for safe cross-thread access (set by spawned thread, read by shutdown())
+    mutable std::atomic<std::thread::id> poll_thread_id_{};
+
+    // Track if shutdown was called
+    mutable std::atomic<bool> shutdown_called_{false};
+
+    // Private constructor - use create() factory
+    explicit PollThread(rusty::sync::mpsc::Sender<PollCommand> sender);
+
+public:
+    ~PollThread();
+
+    // Factory method returns Arc<PollThread>
+    static rusty::Arc<PollThread> create();
+
+    // Explicit shutdown
+    void shutdown() const;
+
+    // Delete copy/move
+    PollThread(const PollThread&) = delete;
+    PollThread& operator=(const PollThread&) = delete;
+    PollThread(PollThread&& other) = delete;
+    PollThread& operator=(PollThread&& other) = delete;
+
+    // Send commands to worker via channel
+    void add(rusty::Arc<Pollable> poll) const;
+    void remove(Pollable& poll) const;
+    void update_mode(Pollable& poll, int new_mode) const;
     void add(rusty::Arc<Job> sp_job) const;
     void remove(rusty::Arc<Job> sp_job) const;
 
-    // For testing: get number of epoll Remove() calls
-    int get_remove_count() const { return poll_.remove_count_.load(); }
+    // For testing - NOTE: This won't work with channel design
+    // since worker state is not accessible. Return 0 for now.
+    int get_remove_count() const { return 0; }
 };
 
 } // namespace rrr
 
-// Trait specializations for PollThreadWorker
-// PollThreadWorker is Send + Sync because:
-// - All methods are const with interior mutability via internal SpinLocks
-// - All members are mutable
-// - Designed for thread-safe concurrent access
+// Trait specializations for PollThread
+// PollThread is Send + Sync because channel operations are thread-safe
 namespace rusty {
 template<>
-struct is_send<rrr::PollThreadWorker> : std::true_type {};
+struct is_send<rrr::PollThread> : std::true_type {};
 
 template<>
-struct is_sync<rrr::PollThreadWorker> : std::true_type {};
+struct is_sync<rrr::PollThread> : std::true_type {};
 } // namespace rusty

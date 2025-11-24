@@ -106,7 +106,7 @@ private:
 
 class FutureTest : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;
     Server* server;
     TestFutureService* service;
     rusty::Option<rusty::Arc<Client>> client;
@@ -118,8 +118,8 @@ protected:
         // Use unique port for each test to avoid TIME_WAIT conflicts
         test_port = base_port + (test_counter++);
 
-        // Create PollThreadWorker Arc
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        // Create PollThread Arc
+        poll_thread_worker_ = rusty::Some(PollThread::create());
 
         // Server now takes Option<Arc<...>> - use as_ref() to borrow and clone
         server = new Server(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
@@ -144,7 +144,7 @@ protected:
         delete service;
         delete server;  // Server destructor waits for connections to close
 
-        // Shutdown PollThreadWorker
+        // Shutdown PollThread
         poll_thread_worker_.as_ref().unwrap()->shutdown();
 
         // Give time for cleanup to complete

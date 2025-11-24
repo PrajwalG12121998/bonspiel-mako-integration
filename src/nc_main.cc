@@ -336,7 +336,7 @@ void *nc_start_client_ycsb(void *input) { // benchmark implementation in the cli
 
 void nc_setup_bench(int nkeys, int nthreads, int run) {  // nkeys for YCSB++
   for (int i=0; i<nthreads; i++) {
-    rrr::PollThreadWorker *pm = new rrr::PollThreadWorker();
+    rrr::PollThread *pm = new rrr::PollThread();
     rrr::Client *client = new rrr::Client(pm);
     auto port_s=std::to_string(10010+i);
     while (client->connect((std::string(server_ip)+":"+port_s).c_str())!=0) {

@@ -224,41 +224,231 @@ void Reactor::ContinueCoro(rusty::Rc<Coroutine> sp_coro) const {
   sp_running_coro_th_ = sp_old_coro;
 }
 
-// TODO PollThreadWorker -> Reactor
+// =============================================================================
+// PollThreadWorker Implementation
+// =============================================================================
 
-// Private constructor - doesn't start thread
-PollThreadWorker::PollThreadWorker()
-    : poll_(Epoll()),
-      l_(rusty::make_box<SpinLock>()),
+PollThreadWorker::PollThreadWorker(rusty::sync::mpsc::Receiver<PollCommand> receiver)
+    : receiver_(std::move(receiver)),
+      poll_(),
       fd_to_pollable_(),
       mode_(),
-      set_sp_jobs_(),
       pending_remove_(),
-      pending_remove_l_(rusty::make_box<SpinLock>()),
-      lock_job_(rusty::make_box<SpinLock>()),
-      join_handle_(rusty::None),
-      stop_flag_(rusty::make_box<std::atomic<bool>>(false)) {
-  // Don't start thread here - factory will do it
+      jobs_(),
+      weak_self_(),
+      stop_(false) {
+  // No eventfd needed - we poll the channel with try_recv() after each epoll_wait
 }
 
-// Factory method creates Arc<PollThreadWorker> and starts thread
-rusty::Arc<PollThreadWorker> PollThreadWorker::create() {
-  // Create Arc with PollThreadWorker
-  auto arc = rusty::Arc<PollThreadWorker>::make();
+rusty::Rc<PollThreadWorker> PollThreadWorker::create(rusty::sync::mpsc::Receiver<PollCommand> receiver) {
+  auto rc = rusty::Rc<PollThreadWorker>::make(std::move(receiver));
+  // Store weak reference to self for passing to Pollables
+  rc->weak_self_ = rusty::downgrade(rc);
+  return rc;
+}
 
-  // Clone Arc for thread
-  auto thread_arc = arc.clone();
+void PollThreadWorker::poll_loop() const {
+  while (!stop_) {
+    TriggerJob();
 
-  // Spawn thread with explicit parameter passing (enforces Send trait checking)
-  // This properly validates that Arc<PollThreadWorker> is Send
+    // Wait for events (epoll_wait with short timeout)
+    poll_.Wait();
+
+    // Process commands from channel (non-blocking try_recv)
+    process_commands();
+
+    TriggerJob();
+
+    // Process deferred removals
+    process_pending_removals();
+
+    TriggerJob();
+    Reactor::GetReactor()->Loop();
+  }
+
+  // Shutdown cleanup - remove all registered pollables
+  for (auto& [fd, sp_poll] : fd_to_pollable_) {
+    // Clear worker reference before removing
+    sp_poll->set_worker(rusty::Weak<PollThreadWorker>{});
+    if (mode_.find(fd) != mode_.end()) {
+      poll_.Remove(sp_poll);
+    }
+  }
+  fd_to_pollable_.clear();
+  mode_.clear();
+  pending_remove_.clear();
+}
+
+void PollThreadWorker::update_mode(Pollable& poll, int new_mode) const {
+  do_update_mode(poll.fd(), new_mode, &poll);
+}
+
+void PollThreadWorker::process_commands() const {
+  // Non-blocking receive: process all pending commands
+  int cmd_count = 0;
+  while (true) {
+    auto result = receiver_.try_recv();
+    if (result.is_err()) {
+      // Empty or disconnected - either way, stop processing
+      break;
+    }
+    cmd_count++;
+    auto cmd = result.unwrap();
+    std::visit([this](auto&& arg) {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, CmdAddPollable>) {
+        do_add_pollable(std::move(arg.pollable));
+      } else if constexpr (std::is_same_v<T, CmdRemovePollable>) {
+        do_remove_pollable(arg.fd);
+      } else if constexpr (std::is_same_v<T, CmdUpdateMode>) {
+        do_update_mode(arg.fd, arg.new_mode, arg.poll_ptr);
+      } else if constexpr (std::is_same_v<T, CmdAddJob>) {
+        do_add_job(std::move(arg.job));
+      } else if constexpr (std::is_same_v<T, CmdRemoveJob>) {
+        do_remove_job(std::move(arg.job));
+      } else if constexpr (std::is_same_v<T, CmdShutdown>) {
+        stop_ = true;
+      }
+    }, cmd);
+  }
+}
+
+void PollThreadWorker::TriggerJob() const {
+  // Copy jobs to process (in case jobs modify the set)
+  std::set<rusty::Arc<Job>> jobs_exec = jobs_;
+  jobs_.clear();
+
+  auto it = jobs_exec.begin();
+  while (it != jobs_exec.end()) {
+    auto sp_job = *it;
+    Job* job_ptr = const_cast<Job*>(sp_job.get());
+    if (job_ptr->Ready()) {
+      // Capture sp_job by value to keep the Arc alive
+      Coroutine::CreateRun([sp_job]() {
+        Job* job_ptr = const_cast<Job*>(sp_job.get());
+        job_ptr->Work();
+      });
+      it = jobs_exec.erase(it);
+    } else {
+      it++;
+    }
+  }
+}
+
+void PollThreadWorker::do_add_pollable(rusty::Arc<Pollable> sp_poll) const {
+  int fd = sp_poll->fd();
+  int poll_mode = sp_poll->poll_mode();
+
+  // Check if already exists
+  if (fd_to_pollable_.find(fd) != fd_to_pollable_.end()) {
+    return;
+  }
+
+  // Set worker reference so Pollable can directly call update_mode
+  sp_poll->set_worker(weak_self());
+
+  // Store in maps
+  fd_to_pollable_.insert_or_assign(fd, sp_poll.clone());
+  mode_[fd] = poll_mode;
+
+  // userdata = raw Pollable* for lookup
+  void* userdata = const_cast<void*>(static_cast<const void*>(sp_poll.get()));
+  poll_.Add(sp_poll, userdata);
+}
+
+void PollThreadWorker::do_remove_pollable(int fd) const {
+  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
+    return;
+  }
+  // Add to pending_remove (actual removal happens after epoll_wait)
+  pending_remove_.insert(fd);
+}
+
+void PollThreadWorker::do_update_mode(int fd, int new_mode, Pollable* poll_ptr) const {
+  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
+    return;
+  }
+
+  auto mode_it = mode_.find(fd);
+  if (mode_it == mode_.end()) {
+    return;
+  }
+
+  int old_mode = mode_it->second;
+  mode_[fd] = new_mode;
+
+  if (new_mode != old_mode) {
+    void* userdata = poll_ptr;
+    poll_.Update(*poll_ptr, userdata, new_mode, old_mode);
+  }
+}
+
+void PollThreadWorker::do_add_job(rusty::Arc<Job> sp_job) const {
+  jobs_.insert(sp_job);
+}
+
+void PollThreadWorker::do_remove_job(rusty::Arc<Job> sp_job) const {
+  jobs_.erase(sp_job);
+}
+
+void PollThreadWorker::process_pending_removals() const {
+  std::unordered_set<int> remove_fds = std::move(pending_remove_);
+  pending_remove_.clear();
+
+  for (int fd : remove_fds) {
+    auto it = fd_to_pollable_.find(fd);
+    if (it == fd_to_pollable_.end()) {
+      continue;
+    }
+
+    auto sp_poll = it->second;
+
+    // Clear worker reference before removing
+    sp_poll->set_worker(rusty::Weak<PollThreadWorker>{});
+
+    // Check if fd was NOT reused (still in mode map)
+    if (mode_.find(fd) != mode_.end()) {
+      poll_.Remove(sp_poll);
+    }
+
+    fd_to_pollable_.erase(it);
+    mode_.erase(fd);
+  }
+}
+
+// =============================================================================
+// PollThread Implementation
+// =============================================================================
+
+PollThread::PollThread(rusty::sync::mpsc::Sender<PollCommand> sender)
+    : sender_(std::move(sender)),
+      join_handle_(rusty::None),
+      poll_thread_id_(),
+      shutdown_called_(false) {
+}
+
+rusty::Arc<PollThread> PollThread::create() {
+  // Create MPSC channel
+  auto [sender, receiver] = rusty::sync::mpsc::channel<PollCommand>();
+
+  // Create PollThread with sender
+  auto arc = rusty::Arc<PollThread>::make(std::move(sender));
+
+  // Pointer to atomic thread ID for safe cross-thread access
+  std::atomic<std::thread::id>* thread_id_ptr = &arc->poll_thread_id_;
+
+  // Spawn thread - worker owns the receiver
   auto handle = rusty::thread::spawn(
-    [](rusty::Arc<PollThreadWorker> arc) {
-      arc->poll_loop();
+    [thread_id_ptr](rusty::sync::mpsc::Receiver<PollCommand> rx) {
+      thread_id_ptr->store(std::this_thread::get_id(), std::memory_order_release);
+      // Create worker wrapped in Rc with weak_self_ initialized
+      auto worker = PollThreadWorker::create(std::move(rx));
+      worker->poll_loop();
     },
-    thread_arc
+    std::move(receiver)
   );
 
-  // Store handle (using const method with mutex)
+  // Store handle
   {
     auto guard = arc->join_handle_.lock();
     *guard = rusty::Some(std::move(handle));
@@ -267,12 +457,20 @@ rusty::Arc<PollThreadWorker> PollThreadWorker::create() {
   return arc;
 }
 
-// Explicit shutdown method
-void PollThreadWorker::shutdown() const {
-  // Signal thread to stop
-  (*stop_flag_).store(true);
+void PollThread::shutdown() const {
+  if (shutdown_called_.exchange(true)) {
+    return;  // Already called
+  }
 
-  // Join thread - poll_loop will handle cleanup of all registered pollables
+  // Send shutdown command via channel
+  sender_.send(CmdShutdown{});
+
+  // Check if we're on the poll thread (atomic load for thread-safe read)
+  if (std::this_thread::get_id() == poll_thread_id_.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  // Join thread
   {
     auto guard = join_handle_.lock();
     if (guard->is_some()) {
@@ -281,203 +479,31 @@ void PollThreadWorker::shutdown() const {
   }
 }
 
-// Destructor ensures clean shutdown
-PollThreadWorker::~PollThreadWorker() {
+PollThread::~PollThread() {
   shutdown();
 }
 
-// @unsafe - Triggers ready jobs in coroutines
-// SAFETY: Uses spinlock for thread safety
-void PollThreadWorker::TriggerJob() const {
-  (*lock_job_).lock();
-  auto jobs_exec = set_sp_jobs_;
-  set_sp_jobs_.clear();
-  (*lock_job_).unlock();
+void PollThread::add(rusty::Arc<Pollable> poll) const {
+  sender_.send(CmdAddPollable{std::move(poll)});
+}
 
-  // Process Arc<Job> jobs
-  auto it = jobs_exec.begin();
-  while (it != jobs_exec.end()) {
-    auto sp_job = *it;
-    // Arc provides const access, but Job methods need mutable access
-    // Safe: we're managing the job lifecycle and calling virtual methods
-    Job* job_ptr = const_cast<Job*>(sp_job.get());
-    if (job_ptr->Ready()) {
-      // IMPORTANT: Capture sp_job by value to keep the Arc alive!
-      // If the coroutine yields, we need to keep the Job alive until it resumes.
-      // Previously we captured only job_ptr (raw pointer), which caused use-after-free
-      // when the Arc was erased from jobs_exec below and the Job was destroyed.
-      Coroutine::CreateRun([sp_job]() {
-        Job* job_ptr = const_cast<Job*>(sp_job.get());
-        job_ptr->Work();
-      });
-      it = jobs_exec.erase(it);
-    }
-    else {
-      it++;
-    }
+void PollThread::remove(Pollable& poll) const {
+  sender_.send(CmdRemovePollable{poll.fd()});
+}
+
+void PollThread::update_mode(Pollable& poll, int new_mode) const {
+  auto result = sender_.send(CmdUpdateMode{poll.fd(), new_mode, &poll});
+  if (result.is_err()) {
+    Log_error("PollThread::update_mode: send failed! Channel disconnected?");
   }
 }
 
-// @unsafe - Main polling loop with complex synchronization
-// SAFETY: Uses spinlocks and proper synchronization primitives
-void PollThreadWorker::poll_loop() const {
-  while (!(*stop_flag_).load()) {
-    TriggerJob();
-    // Wait() now directly casts userdata to Pollable* and calls handlers
-    // Safe because deferred removal guarantees object stays in fd_to_pollable_ map
-    poll_.Wait();
-    TriggerJob();
-
-    // Process deferred removals AFTER all events handled
-    (*pending_remove_l_).lock();
-    std::unordered_set<int> remove_fds = std::move(pending_remove_);
-    pending_remove_.clear();
-    (*pending_remove_l_).unlock();
-
-    for (int fd : remove_fds) {
-      (*l_).lock();
-
-      auto it = fd_to_pollable_.find(fd);
-      if (it == fd_to_pollable_.end()) {
-        (*l_).unlock();
-        continue;
-      }
-
-      auto sp_poll = it->second;
-
-      // Check if fd was NOT reused (still in mode_ map)
-      if (mode_.find(fd) != mode_.end()) {
-        poll_.Remove(sp_poll);
-      }
-
-      // Remove from map - object may be destroyed here
-      fd_to_pollable_.erase(it);
-      mode_.erase(fd);
-
-      (*l_).unlock();
-    }
-    TriggerJob();
-    Reactor::GetReactor()->Loop();
-  }
-
-  // When shutting down, add ALL remaining registered pollables to pending_remove_
-  // This ensures proper cleanup even if remove() was never explicitly called
-  (*l_).lock();
-  for (auto& [fd, _] : fd_to_pollable_) {
-    pending_remove_.insert(fd);
-  }
-  (*l_).unlock();
-
-  // Process all pending removals (both explicit and from shutdown)
-  for (int fd : pending_remove_) {
-    (*l_).lock();
-
-    auto it = fd_to_pollable_.find(fd);
-    if (it == fd_to_pollable_.end()) {
-      (*l_).unlock();
-      continue;
-    }
-
-    auto sp_poll = it->second;
-
-    // Check if fd was NOT reused (still in mode_ map)
-    if (mode_.find(fd) != mode_.end()) {
-      poll_.Remove(sp_poll);
-    }
-
-    // Remove from map - object may be destroyed here
-    fd_to_pollable_.erase(it);
-    mode_.erase(fd);
-
-    (*l_).unlock();
-  }
-  pending_remove_.clear();
+void PollThread::add(rusty::Arc<Job> sp_job) const {
+  sender_.send(CmdAddJob{std::move(sp_job)});
 }
 
-// @safe - Thread-safe job addition with polymorphic Arc
-void PollThreadWorker::add(rusty::Arc<Job> sp_job) const {
-  (*lock_job_).lock();
-  set_sp_jobs_.insert(sp_job);
-  (*lock_job_).unlock();
-}
-
-// @safe - Thread-safe job removal with polymorphic Arc
-void PollThreadWorker::remove(rusty::Arc<Job> sp_job) const {
-  (*lock_job_).lock();
-  set_sp_jobs_.erase(sp_job);
-  (*lock_job_).unlock();
-}
-
-// @safe - Adds pollable with polymorphic Arc ownership
-// SAFETY: Stores Arc in map, passes raw pointer to epoll for fast lookup
-void PollThreadWorker::add(rusty::Arc<Pollable> sp_poll) const{
-  int fd = sp_poll->fd();
-  int poll_mode = sp_poll->poll_mode();
-
-  (*l_).lock();
-
-  // Check if already exists
-  if (fd_to_pollable_.find(fd) != fd_to_pollable_.end()) {
-    (*l_).unlock();
-    return;
-  }
-
-  // Store in map
-  fd_to_pollable_.insert_or_assign(fd, sp_poll.clone());
-  mode_[fd] = poll_mode;
-
-  // userdata = raw Pollable* for lookup (safe - kept alive by fd_to_pollable_ map)
-  // Arc::get() returns const pointer, but epoll needs void* userdata
-  // Safe: userdata is only used as an opaque identifier, not for mutation
-  void* userdata = const_cast<void*>(static_cast<const void*>(sp_poll.get()));
-
-  poll_.Add(sp_poll, userdata);
-
-  (*l_).unlock();
-}
-
-// @unsafe - Removes pollable with deferred cleanup
-// SAFETY: Deferred removal ensures safe cleanup
-void PollThreadWorker::remove(Pollable& poll) const {
-  int fd = poll.fd();
-
-  (*l_).lock();
-  bool found = (fd_to_pollable_.find(fd) != fd_to_pollable_.end());
-  (*l_).unlock();
-
-  if (!found) {
-    return;  // Not found
-  }
-
-  // Add to pending_remove (actual removal happens after epoll_wait)
-  (*pending_remove_l_).lock();
-  pending_remove_.insert(fd);
-  (*pending_remove_l_).unlock();
-}
-
-// @unsafe - Updates poll mode
-// SAFETY: Protected by spinlock, validates poll existence
-void PollThreadWorker::update_mode(Pollable& poll, int new_mode) const {
-  int fd = poll.fd();
-  (*l_).lock();
-
-  // Verify the pollable is registered
-  if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
-    (*l_).unlock();
-    return;
-  }
-
-  auto mode_it = mode_.find(fd);
-  verify(mode_it != mode_.end());
-  int old_mode = mode_it->second;
-  mode_[fd] = new_mode;
-
-  if (new_mode != old_mode) {
-    void* userdata = &poll;  // Use address of reference
-    poll_.Update(poll, userdata, new_mode, old_mode);
-  }
-
-  (*l_).unlock();
+void PollThread::remove(rusty::Arc<Job> sp_job) const {
+  sender_.send(CmdRemoveJob{std::move(sp_job)});
 }
 
 } // namespace rrr

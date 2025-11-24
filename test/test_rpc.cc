@@ -71,17 +71,17 @@ public:
 
 class RPCTest : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;  // Shared Arc<PollThreadWorker>
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;  // Shared Arc<PollThread>
     Server* server;
     TestService* service;
     rusty::Option<rusty::Arc<Client>> client;
     static constexpr int test_port = 8848;
 
     void SetUp() override {
-        // Create PollThreadWorker Arc
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        // Create PollThread Arc
+        poll_thread_worker_ = rusty::Some(PollThread::create());
 
-        // Server now takes Option<Arc<PollThreadWorker>> - use as_ref() to borrow and clone
+        // Server now takes Option<Arc<PollThread>> - use as_ref() to borrow and clone
         server = new Server(rusty::Some(poll_thread_worker_.as_ref().unwrap().clone()));
         service = new TestService();
 
@@ -102,7 +102,7 @@ protected:
         delete service;
         delete server;  // Server destructor waits for connections to close
 
-        // Shutdown PollThreadWorker (const method, no lock needed)
+        // Shutdown PollThread (const method, no lock needed)
         poll_thread_worker_.as_ref().unwrap()->shutdown();
     }
 };
@@ -423,14 +423,14 @@ TEST_F(RPCTest, FastClientSlowServer) {
 
 class ConnectionErrorTest : public ::testing::Test {
 protected:
-    rusty::Option<rusty::Arc<PollThreadWorker>> poll_thread_worker_;  // Shared Arc<PollThreadWorker>
+    rusty::Option<rusty::Arc<PollThread>> poll_thread_worker_;  // Shared Arc<PollThread>
 
     void SetUp() override {
-        poll_thread_worker_ = rusty::Some(PollThreadWorker::create());
+        poll_thread_worker_ = rusty::Some(PollThread::create());
     }
 
     void TearDown() override {
-        // Shutdown PollThreadWorker (const method, no lock needed)
+        // Shutdown PollThread (const method, no lock needed)
         poll_thread_worker_.as_ref().unwrap()->shutdown();
     }
 };
@@ -468,8 +468,8 @@ TEST_F(ConnectionErrorTest, InvalidPort) {
     // Arc handles cleanup automatically
 }
 
-// Stress test for PollThreadWorker thread safety
-// Tests that 100 threads can safely share a single PollThreadWorker
+// Stress test for PollThread thread safety
+// Tests that 100 threads can safely share a single PollThread
 // Each thread creates its own client, connects, and makes RPC calls
 TEST_F(RPCTest, MultiThreadedStressTest) {
     const int num_threads = 100;
@@ -483,13 +483,13 @@ TEST_F(RPCTest, MultiThreadedStressTest) {
 
         // Spawn thread with explicit parameter passing (enforces Send trait)
         auto handle = rusty::thread::spawn(
-            [](rusty::Arc<PollThreadWorker> worker,
+            [](rusty::Arc<PollThread> worker,
                int tid,
                int requests) -> std::pair<int, int> {
                 int thread_successes = 0;
                 int thread_failures = 0;
 
-                // Each thread creates its own client using the shared PollThreadWorker
+                // Each thread creates its own client using the shared PollThread
                 auto thread_client = Client::create(worker);
 
                 // Connect to server

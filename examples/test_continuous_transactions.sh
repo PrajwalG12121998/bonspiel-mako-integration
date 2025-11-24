@@ -29,7 +29,6 @@ echo ""
 echo "Cleaning up existing processes..."
 pkill -9 continuousTransactions 2>/dev/null
 pkill -9 dbtest 2>/dev/null
-pkill -9 simplePaxos 2>/dev/null
 pkill -9 simpleTransactionRep 2>/dev/null
 # Wait for ports to be released
 sleep 2

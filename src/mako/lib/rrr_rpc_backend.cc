@@ -53,8 +53,8 @@ int RrrRpcBackend::Initialize(const std::string& local_uri,
                               uint8_t st_nr_req_types,
                               uint8_t end_nr_req_types) {
 
-    // Create PollThreadWorker for event-driven I/O
-    poll_thread_worker_ = rusty::Some(rrr::PollThreadWorker::create());
+    // Create PollThread for event-driven I/O
+    poll_thread_worker_ = rusty::Some(rrr::PollThread::create());
     Notice("RrrRpcBackend::Initialize: poll_thread_worker_ created, is_some=%d", poll_thread_worker_.is_some());
 
     // Extract host and port from local_uri (format: "host:port")
@@ -513,7 +513,7 @@ bool RrrRpcBackend::SendBatchToAll(TransportReceiver* src,
 
 // Run event loop
 void RrrRpcBackend::RunEventLoop() {
-    // The PollThreadWorker runs its own thread for network I/O
+    // The PollThread runs its own thread for network I/O
     // Here we process responses from helper threads and send them back
     Notice("RrrRpcBackend::RunEventLoop: Starting event loop");
 

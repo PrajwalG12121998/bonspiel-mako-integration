@@ -178,7 +178,7 @@ private:
     int cluster_role_;
 
     // rrr/rpc state
-    rusty::Option<rusty::Arc<rrr::PollThreadWorker>> poll_thread_worker_;
+    rusty::Option<rusty::Arc<rrr::PollThread>> poll_thread_worker_;
     rrr::Server* server_{nullptr};
 
     // Client connections: {(cluster_role, shard_idx, server_id) -> Client}

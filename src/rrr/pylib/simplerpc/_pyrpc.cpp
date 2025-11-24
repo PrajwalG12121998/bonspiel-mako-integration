@@ -17,10 +17,10 @@
 using namespace rrr;
 
 // Wrapper to hold Arc<Mutex<>> for Python binding
-struct PollThreadWorkerWrapper {
-    rusty::Arc<PollThreadWorker> arc;
+struct PollThreadWrapper {
+    rusty::Arc<PollThread> arc;
 
-    PollThreadWorkerWrapper() : arc(PollThreadWorker::create()) {
+    PollThreadWrapper() : arc(PollThread::create()) {
     }
 };
 
@@ -42,7 +42,7 @@ static PyObject* _pyrpc_init_server(PyObject* self, PyObject* args) {
     unsigned long n_threads;
     if (!PyArg_ParseTuple(args, "k", &n_threads))
         return NULL;
-    auto poll_arc = PollThreadWorker::create();
+    auto poll_arc = PollThread::create();
     ThreadPool* thrpool = new ThreadPool(n_threads);
     Log_debug("created rrr::Server with %d worker threads", n_threads);
     Server* svr = new Server(poll_arc, thrpool);
@@ -147,9 +147,9 @@ static PyObject* _pyrpc_server_reg(PyObject* self, PyObject* args) {
 
 static PyObject* _pyrpc_init_poll_thread_worker(PyObject* self, PyObject* args) {
     GILHelper gil_helper;
-    // Create wrapper that holds Arc<PollThreadWorker>
+    // Create wrapper that holds Arc<PollThread>
     // Python will manage this wrapper's lifetime
-    auto* wrapper = new PollThreadWorkerWrapper();
+    auto* wrapper = new PollThreadWrapper();
     return Py_BuildValue("k", wrapper);
 }
 
@@ -158,7 +158,7 @@ static PyObject* _pyrpc_init_client(PyObject* self, PyObject* args) {
     unsigned long u;
     if (!PyArg_ParseTuple(args, "k", &u))
         return NULL;
-    auto* wrapper = (PollThreadWorkerWrapper*) u;
+    auto* wrapper = (PollThreadWrapper*) u;
     Client* clnt = new Client(wrapper->arc);
     return Py_BuildValue("k", clnt);
 }
