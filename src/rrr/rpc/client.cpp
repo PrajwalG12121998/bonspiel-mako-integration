@@ -247,10 +247,17 @@ void Client::handle_read() {
   }
 
   int bytes_read = in_.borrow_mut()->read_from_fd(sock_.get());
-  if (bytes_read == 0) {
+
+  // Optimization: If no new data was read AND buffer is empty, return early.
+  // CRITICAL BUG FIX: With edge-triggered epoll (EPOLLET), we MUST check if
+  // there's buffered data to process. The old code would return early even when
+  // content_size() > 0, causing futures to hang because buffered packets never
+  // got processed and we'd lose the edge trigger.
+  if (bytes_read == 0 && in_.borrow()->content_size() == 0) {
     return;
   }
 
+  // Process all complete packets in the buffer
   for (;;) {
     //Log_info("stuck in client handle_read loop");
     i32 packet_size;

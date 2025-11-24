@@ -78,6 +78,8 @@ compile() {
     echo "Running: ./ci/ci.sh compile"
     echo "========================================="
     make -j32
+    # Generate configuration
+    bash ./src/mako/update_config.sh
 }
 
 # Function 2: Run simple transaction test

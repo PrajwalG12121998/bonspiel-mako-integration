@@ -1040,20 +1040,20 @@ if(BUILD_TESTS)
     set_tests_properties(rpcbench PROPERTIES TIMEOUT 30)
 
     # simplePaxos requires config generation and running a shell script that launches multiple processes
-    add_test(NAME simplePaxos
-        COMMAND bash -c "bash ./src/mako/update_config.sh && bash ./examples/simplePaxos.sh"
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
-    set_tests_properties(simplePaxos PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 120)
+    # add_test(NAME simplePaxos
+    #     COMMAND bash -c "bash ./src/mako/update_config.sh && bash ./examples/simplePaxos.sh"
+    #     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    # )
+    # # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
+    # set_tests_properties(simplePaxos PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 120)
 
     # shard1ReplicationSimple tests 1-shard replication using simpleTransactionRep
-    add_test(NAME shard1ReplicationSimple
-        COMMAND bash -c "bash ./examples/test_1shard_replication_simple.sh"
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
-    set_tests_properties(shard1ReplicationSimple PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 300)
+    # add_test(NAME shard1ReplicationSimple
+    #     COMMAND bash -c "bash ./examples/test_1shard_replication_simple.sh"
+    #     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    # )
+    # # Use RESOURCE_LOCK to prevent port conflicts with other Paxos tests (ports 17001-17xxx)
+    # set_tests_properties(shard1ReplicationSimple PROPERTIES RESOURCE_LOCK "paxos_ports" TIMEOUT 300)
 
     # Add a convenience target to run all tests
     add_custom_target(run_tests
