@@ -59,12 +59,14 @@ public:
     }
 
     // @unsafe - Uses mutable field
-    void handle_write() override {
+    // Returns MODE_NO_CHANGE since test doesn't need mode updates
+    int handle_write() override {
         // @unsafe {
         if (write_handler_) {
             write_handler_();
         }
         // }
+        return Pollable::MODE_NO_CHANGE;
     }
 
     // @unsafe - Uses mutable field

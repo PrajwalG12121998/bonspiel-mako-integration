@@ -235,24 +235,25 @@ PollThreadWorker::PollThreadWorker(rusty::sync::mpsc::Receiver<PollCommand> rece
       mode_(),
       pending_remove_(),
       jobs_(),
-      weak_self_(),
       stop_(false) {
   // No eventfd needed - we poll the channel with try_recv() after each epoll_wait
 }
 
-rusty::Rc<PollThreadWorker> PollThreadWorker::create(rusty::sync::mpsc::Receiver<PollCommand> receiver) {
-  auto rc = rusty::Rc<PollThreadWorker>::make(std::move(receiver));
-  // Store weak reference to self for passing to Pollables
-  rc->weak_self_ = rusty::downgrade(rc);
-  return rc;
+rusty::Rc<rusty::RefCell<PollThreadWorker>> PollThreadWorker::create(rusty::sync::mpsc::Receiver<PollCommand> receiver) {
+  // Create worker, then wrap in RefCell
+  PollThreadWorker worker(std::move(receiver));
+  return rusty::Rc<rusty::RefCell<PollThreadWorker>>::make(std::move(worker));
 }
 
-void PollThreadWorker::poll_loop() const {
+void PollThreadWorker::poll_loop() {
   while (!stop_) {
     TriggerJob();
 
     // Wait for events (epoll_wait with short timeout)
-    poll_.Wait();
+    // Pass callback to handle mode updates from handle_write() return values
+    poll_.Wait([this](Pollable* poll, int new_mode) {
+      do_update_mode(poll->fd(), new_mode, poll);
+    });
 
     // Process commands from channel (non-blocking try_recv)
     process_commands();
@@ -268,8 +269,6 @@ void PollThreadWorker::poll_loop() const {
 
   // Shutdown cleanup - remove all registered pollables
   for (auto& [fd, sp_poll] : fd_to_pollable_) {
-    // Clear worker reference before removing
-    sp_poll->set_worker(rusty::Weak<PollThreadWorker>{});
     if (mode_.find(fd) != mode_.end()) {
       poll_.Remove(sp_poll);
     }
@@ -279,11 +278,7 @@ void PollThreadWorker::poll_loop() const {
   pending_remove_.clear();
 }
 
-void PollThreadWorker::update_mode(Pollable& poll, int new_mode) const {
-  do_update_mode(poll.fd(), new_mode, &poll);
-}
-
-void PollThreadWorker::process_commands() const {
+void PollThreadWorker::process_commands() {
   // Non-blocking receive: process all pending commands
   int cmd_count = 0;
   while (true) {
@@ -313,7 +308,7 @@ void PollThreadWorker::process_commands() const {
   }
 }
 
-void PollThreadWorker::TriggerJob() const {
+void PollThreadWorker::TriggerJob() {
   // Copy jobs to process (in case jobs modify the set)
   std::set<rusty::Arc<Job>> jobs_exec = jobs_;
   jobs_.clear();
@@ -335,7 +330,7 @@ void PollThreadWorker::TriggerJob() const {
   }
 }
 
-void PollThreadWorker::do_add_pollable(rusty::Arc<Pollable> sp_poll) const {
+void PollThreadWorker::do_add_pollable(rusty::Arc<Pollable> sp_poll) {
   int fd = sp_poll->fd();
   int poll_mode = sp_poll->poll_mode();
 
@@ -343,9 +338,6 @@ void PollThreadWorker::do_add_pollable(rusty::Arc<Pollable> sp_poll) const {
   if (fd_to_pollable_.find(fd) != fd_to_pollable_.end()) {
     return;
   }
-
-  // Set worker reference so Pollable can directly call update_mode
-  sp_poll->set_worker(weak_self());
 
   // Store in maps
   fd_to_pollable_.insert_or_assign(fd, sp_poll.clone());
@@ -356,7 +348,7 @@ void PollThreadWorker::do_add_pollable(rusty::Arc<Pollable> sp_poll) const {
   poll_.Add(sp_poll, userdata);
 }
 
-void PollThreadWorker::do_remove_pollable(int fd) const {
+void PollThreadWorker::do_remove_pollable(int fd) {
   if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
     return;
   }
@@ -364,7 +356,7 @@ void PollThreadWorker::do_remove_pollable(int fd) const {
   pending_remove_.insert(fd);
 }
 
-void PollThreadWorker::do_update_mode(int fd, int new_mode, Pollable* poll_ptr) const {
+void PollThreadWorker::do_update_mode(int fd, int new_mode, Pollable* poll_ptr) {
   if (fd_to_pollable_.find(fd) == fd_to_pollable_.end()) {
     return;
   }
@@ -383,15 +375,15 @@ void PollThreadWorker::do_update_mode(int fd, int new_mode, Pollable* poll_ptr) 
   }
 }
 
-void PollThreadWorker::do_add_job(rusty::Arc<Job> sp_job) const {
+void PollThreadWorker::do_add_job(rusty::Arc<Job> sp_job) {
   jobs_.insert(sp_job);
 }
 
-void PollThreadWorker::do_remove_job(rusty::Arc<Job> sp_job) const {
+void PollThreadWorker::do_remove_job(rusty::Arc<Job> sp_job) {
   jobs_.erase(sp_job);
 }
 
-void PollThreadWorker::process_pending_removals() const {
+void PollThreadWorker::process_pending_removals() {
   std::unordered_set<int> remove_fds = std::move(pending_remove_);
   pending_remove_.clear();
 
@@ -402,9 +394,6 @@ void PollThreadWorker::process_pending_removals() const {
     }
 
     auto sp_poll = it->second;
-
-    // Clear worker reference before removing
-    sp_poll->set_worker(rusty::Weak<PollThreadWorker>{});
 
     // Check if fd was NOT reused (still in mode map)
     if (mode_.find(fd) != mode_.end()) {
@@ -441,9 +430,10 @@ rusty::Arc<PollThread> PollThread::create() {
   auto handle = rusty::thread::spawn(
     [thread_id_ptr](rusty::sync::mpsc::Receiver<PollCommand> rx) {
       thread_id_ptr->store(std::this_thread::get_id(), std::memory_order_release);
-      // Create worker wrapped in Rc with weak_self_ initialized
+      // Create worker wrapped in Rc<RefCell<>>
       auto worker = PollThreadWorker::create(std::move(rx));
-      worker->poll_loop();
+      // borrow_mut() returns RefMut<T>, use -> to access methods
+      worker->borrow_mut()->poll_loop();
     },
     std::move(receiver)
   );

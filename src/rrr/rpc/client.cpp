@@ -219,24 +219,21 @@ void Client::handle_error() {
 
 // @unsafe - Writes buffered data to socket
 // SAFETY: Protected by spinlock, handles partial writes
-void Client::handle_write() {
+// Returns new poll mode, or MODE_NO_CHANGE if no update needed
+int Client::handle_write() {
   if (status_.get() != CONNECTED) {
-    return;
+    return Pollable::MODE_NO_CHANGE;
   }
 
+  int result = Pollable::MODE_NO_CHANGE;
   out_l_.get()->lock();
   out_.borrow_mut()->write_to_fd(sock_.get());
   if (out_.borrow()->empty()) {
-    //Log_info("Client handle_write setting read mode here...");
-    if (worker() != nullptr) {
-      // Use direct path via stored worker reference
-      worker()->update_mode(*this, Pollable::READ);
-    } else {
-      // Fallback to channel-based update (worker reference not yet set)
-      poll_thread_worker_->update_mode(const_cast<Client&>(*this), Pollable::READ);
-    }
+    // Return READ-only mode - PollThreadWorker will update epoll
+    result = Pollable::READ;
   }
   out_l_.get()->unlock();
+  return result;
 }
 
 // @unsafe - Reads and processes RPC responses

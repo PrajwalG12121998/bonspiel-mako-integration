@@ -295,7 +295,8 @@ public:
     void handle_read();
     // @unsafe - Sends buffered data
     // SAFETY: Protected by output spinlock
-    void handle_write();
+    // Returns new poll mode, or MODE_NO_CHANGE if no update needed
+    int handle_write() override;
     // @unsafe - Error handler that closes connection
     void handle_error();
 

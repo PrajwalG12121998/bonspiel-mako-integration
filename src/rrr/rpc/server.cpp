@@ -158,14 +158,10 @@ void ServerConnection::end_reply() {
 
     // only update poll mode if connection is still active
     // (connection might have closed while handler was running)
+    // NOTE: end_reply() is called from handler threads, NOT the poll thread.
+    // Must use channel-based update_mode() - always goes through PollThread.
     if (status_ == CONNECTED) {
-        if (worker() != nullptr) {
-            // Use direct path via stored worker reference
-            worker()->update_mode(*this, Pollable::READ | Pollable::WRITE);
-        } else {
-            // Fallback to channel-based update (worker reference not yet set)
-            server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ | Pollable::WRITE);
-        }
+        server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ | Pollable::WRITE);
     }
 
     out_l_.unlock();
@@ -288,23 +284,21 @@ void ServerConnection::handle_read() {
 
 // @unsafe - Writes buffered data to socket
 // SAFETY: Protected by output spinlock
-void ServerConnection::handle_write() {
+// Returns new poll mode, or MODE_NO_CHANGE if no update needed
+int ServerConnection::handle_write() {
     if (status_ == CLOSED) {
-        return;
+        return Pollable::MODE_NO_CHANGE;
     }
 
+    int result = Pollable::MODE_NO_CHANGE;
     out_l_.lock();
     out_.write_to_fd(socket_);
     if (out_.empty()) {
-        if (worker() != nullptr) {
-            // Use direct path via stored worker reference
-            worker()->update_mode(*this, Pollable::READ);
-        } else {
-            // Fallback to channel-based update (worker reference not yet set)
-            server_->poll_thread_worker_.as_ref().unwrap()->update_mode(*this, Pollable::READ);
-        }
+        // Return READ-only mode - PollThreadWorker will update epoll
+        result = Pollable::READ;
     }
     out_l_.unlock();
+    return result;
 }
 
 // @safe - Simple error handler

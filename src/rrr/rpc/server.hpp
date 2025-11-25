@@ -102,7 +102,8 @@ class ServerListener: public Pollable {
   }
 
   // @safe - Not implemented, will abort if called
-  void handle_write() override {verify(0);}
+  // Returns MODE_NO_CHANGE since ServerListener never handles write
+  int handle_write() override {verify(0); return Pollable::MODE_NO_CHANGE;}
 
   // @unsafe - Calls unsafe Log::debug for connection logging
   // SAFETY: Thread-safe with server connection lock
@@ -238,7 +239,8 @@ public:
     int poll_mode() const override;
     // @unsafe - Writes buffered data to socket
     // SAFETY: Protected by output spinlock
-    void handle_write() override;
+    // Returns new poll mode, or MODE_NO_CHANGE if no update needed
+    int handle_write() override;
     // @unsafe - Reads and processes RPC requests
     // SAFETY: Creates coroutines for handlers
     void handle_read() override;

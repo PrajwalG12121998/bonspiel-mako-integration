@@ -24,14 +24,28 @@
 // External safety annotations for system functions used in this module
 // @external: {
 //   pthread_setname_np: [unsafe, (pthread_t, const char*) -> int]
+//   epoll_create: [unsafe, (int) -> int]
+//   epoll_ctl: [unsafe, (int, int, int, struct epoll_event*) -> int]
+//   epoll_wait: [unsafe, (int, struct epoll_event*, int, int) -> int]
+//   kqueue: [unsafe, () -> int]
+//   kevent: [unsafe, (int, const struct kevent*, int, struct kevent*, int, const struct timespec*) -> int]
+//   close: [unsafe, (int) -> int]
+//   std::__atomic_base::load: [unsafe, (std::memory_order) -> auto]
 // }
 
-// External safety annotations for STL operations
+// External safety annotations for STL and RustyCpp operations
 // @external: {
 //   operator!=: [unsafe, (auto, auto) -> bool]
 //   operator==: [unsafe, (auto, auto) -> bool]
 //   std::*::find: [unsafe, (auto) -> auto]
 //   std::*::end: [unsafe, () -> auto]
+//   std::*::begin: [unsafe, () -> auto]
+//   std::*::insert: [unsafe, (auto...) -> auto]
+//   std::*::erase: [unsafe, (auto) -> auto]
+//   std::*::clear: [unsafe, () -> void]
+//   std::*::empty: [unsafe, () -> bool]
+//   std::*::size: [unsafe, () -> size_t]
+//   std::*::operator[]: [unsafe, (auto) -> auto&]
 //   std::make_shared: [unsafe, (auto...) -> std::shared_ptr<auto>]
 //   std::shared_ptr::operator*: [unsafe, () -> auto&]
 //   std::shared_ptr::operator->: [unsafe, () -> auto*]
@@ -40,6 +54,20 @@
 //   std::shared_ptr::shared_ptr: [unsafe, (auto...) -> void]
 //   std::list::push_back: [unsafe, (auto) -> void]
 //   std::vector::push_back: [unsafe, (auto) -> void]
+//   std::unordered_map::operator[]: [unsafe, (auto) -> auto&]
+//   std::unordered_map::find: [unsafe, (auto) -> auto]
+//   std::unordered_map::erase: [unsafe, (auto) -> auto]
+//   std::unordered_map::insert: [unsafe, (auto) -> auto]
+//   std::unordered_map::clear: [unsafe, () -> void]
+//   std::unordered_set::insert: [unsafe, (auto) -> auto]
+//   std::unordered_set::erase: [unsafe, (auto) -> auto]
+//   std::unordered_set::find: [unsafe, (auto) -> auto]
+//   std::unordered_set::clear: [unsafe, () -> void]
+//   std::set::insert: [unsafe, (auto) -> auto]
+//   std::set::erase: [unsafe, (auto) -> auto]
+//   std::set::find: [unsafe, (auto) -> auto]
+//   std::set::clear: [unsafe, () -> void]
+//   rusty::rc::Weak::Weak: [safe, () -> void]
 // }
 
 namespace rrr {
@@ -179,90 +207,77 @@ namespace rrr {
 // Runs entirely in the spawned thread
 // Receives commands from PollThread via mpsc channel
 //
-// @unsafe - Contains STL containers and uses Epoll system calls
-// SAFETY: Despite @unsafe annotation, PollThreadWorker is memory-safe because:
+// @safe - Single-threaded worker with RefCell for interior mutability
+// SAFETY: PollThreadWorker is memory-safe because:
 // 1. Single-threaded: Runs only on its dedicated poll thread, no data races
 // 2. Ownership: Owns all Pollables via fd_to_pollable_ map
-// 3. Lifetime: Worker outlives all Pollables - on shutdown, clears worker
-//    references before destruction
+// 3. Lifetime: Worker outlives all Pollables - on shutdown, clears before destruction
 // 4. Channel: Cross-thread communication only via thread-safe mpsc channel
+// 5. No re-entrancy: handle_write() returns new mode instead of calling back,
+//    so RefCell borrow is never held across handler calls
 class PollThreadWorker {
     friend class PollThread;
-    friend class rusty::Rc<PollThreadWorker>;
+    friend class rusty::Rc<rusty::RefCell<PollThreadWorker>>;
 
 public:
-    // Factory method - creates worker wrapped in Rc with weak_self_ initialized
-    static rusty::Rc<PollThreadWorker> create(rusty::sync::mpsc::Receiver<PollCommand> receiver);
+    // Factory method - creates worker wrapped in Rc<RefCell<>>
+    static rusty::Rc<rusty::RefCell<PollThreadWorker>> create(rusty::sync::mpsc::Receiver<PollCommand> receiver);
 
     // Constructor is public for Rc::make(), but prefer create() factory
     explicit PollThreadWorker(rusty::sync::mpsc::Receiver<PollCommand> receiver);
 
     ~PollThreadWorker() = default;
 
-    // Delete copy/move - worker is owned by Rc
+    // Delete copy - worker is owned by Rc<RefCell<>>
     PollThreadWorker(const PollThreadWorker&) = delete;
     PollThreadWorker& operator=(const PollThreadWorker&) = delete;
-    PollThreadWorker(PollThreadWorker&&) = delete;
+    // Allow move - needed for RefCell construction
+    PollThreadWorker(PollThreadWorker&&) = default;
     PollThreadWorker& operator=(PollThreadWorker&&) = delete;
 
     // Main polling loop - processes epoll events and channel commands
-    // Const because Rc gives const access - uses mutable fields for state
-    void poll_loop() const;
-
-    // Get weak reference to self (for passing to Pollables)
-    rusty::rc::Weak<PollThreadWorker> weak_self() const { return weak_self_; }
-
-    // Direct update_mode for use by handlers running on poll thread
-    // This bypasses the channel for better performance
-    void update_mode(Pollable& poll, int new_mode) const;
+    // Non-const because it modifies state (no more mutable fields)
+    void poll_loop();
 
 private:
-    // For testing: get number of epoll Remove() calls
+    // @unsafe - For testing: get number of epoll Remove() calls
+    // SAFETY: Atomic load is safe but requires @unsafe annotation
     int get_remove_count() const { return poll_.remove_count_.load(); }
 
 private:
     // Process incoming commands from channel
-    void process_commands() const;
+    void process_commands();
 
     // Triggers ready jobs in coroutines
-    void TriggerJob() const;
+    void TriggerJob();
 
-    // Internal implementations (no longer need to be thread-safe - single owner)
-    // All const because they use mutable fields (single-threaded, no races)
-    void do_add_pollable(rusty::Arc<Pollable> sp_poll) const;
-    void do_remove_pollable(int fd) const;
-    void do_update_mode(int fd, int new_mode, Pollable* poll_ptr) const;
-    void do_add_job(rusty::Arc<Job> sp_job) const;
-    void do_remove_job(rusty::Arc<Job> sp_job) const;
+    // Internal implementations (single-threaded, no races)
+    void do_add_pollable(rusty::Arc<Pollable> sp_poll);
+    void do_remove_pollable(int fd);
+    void do_update_mode(int fd, int new_mode, Pollable* poll_ptr);
+    void do_add_job(rusty::Arc<Job> sp_job);
+    void do_remove_job(rusty::Arc<Job> sp_job);
 
     // Process deferred removals
-    void process_pending_removals() const;
+    void process_pending_removals();
 
 private:
     // MPSC receiver for commands from PollThread
-    // Mutable for const poll_loop() - single-threaded, no races
-    mutable rusty::sync::mpsc::Receiver<PollCommand> receiver_;
+    rusty::sync::mpsc::Receiver<PollCommand> receiver_;
 
     // Epoll instance
-    // Mutable for const poll_loop() - single-threaded, no races
-    mutable Epoll poll_;
+    Epoll poll_;
 
-    // Pollable state - no longer needs Mutex (single owner in worker thread)
-    // Mutable for const poll_loop() - single-threaded, no races
-    mutable std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
-    mutable std::unordered_map<int, int> mode_;  // fd -> mode
-    mutable std::unordered_set<int> pending_remove_;
+    // Pollable state - single owner in worker thread
+    std::unordered_map<int, rusty::Arc<Pollable>> fd_to_pollable_;
+    std::unordered_map<int, int> mode_;  // fd -> mode
+    std::unordered_set<int> pending_remove_;
 
-    // Jobs - no longer needs Mutex (single owner in worker thread)
-    // Mutable for const poll_loop() - single-threaded, no races
-    mutable std::set<rusty::Arc<Job>> jobs_;
-
-    // Weak reference to self (set by create() factory)
-    mutable rusty::rc::Weak<PollThreadWorker> weak_self_{};
+    // Jobs - single owner in worker thread
+    std::set<rusty::Arc<Job>> jobs_;
 
     // Stop flag
-    // Mutable for const poll_loop() - single-threaded, no races
-    mutable bool stop_ = false;
+    bool stop_ = false;
 };
 
 // =============================================================================

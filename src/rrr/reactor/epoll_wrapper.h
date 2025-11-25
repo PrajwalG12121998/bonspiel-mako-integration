@@ -6,6 +6,7 @@
 #include "base/all.hpp"
 #include <rusty/rc.hpp>
 #include <rusty/rc/weak.hpp>
+#include <rusty/refcell.hpp>
 #include <unistd.h>
 #include <array>
 #include <cerrno>
@@ -26,11 +27,13 @@ namespace rrr {
 // Forward declaration
 class PollThreadWorker;
 
-// @unsafe - Abstract interface for pollable file descriptors
-// (has mutable field for interior mutability, handle_* methods are unsafe)
+// @safe - Abstract interface for pollable file descriptors
 class Pollable {
 public:
     virtual ~Pollable() {}
+
+    // Special return value for handle_write() indicating no mode change needed
+    static constexpr int MODE_NO_CHANGE = -1;
 
     enum {
         READ = 0x1, WRITE = 0x2
@@ -43,28 +46,11 @@ public:
     // @unsafe - Handles read events (implementation-specific)
     virtual void handle_read() = 0;
     // @unsafe - Handles write events (implementation-specific)
-    virtual void handle_write() = 0;
+    // Returns new poll mode, or MODE_NO_CHANGE (-1) if no update needed
+    // PollThreadWorker will call update_mode() based on return value
+    virtual int handle_write() = 0;
     // @unsafe - Handles error events (implementation-specific)
     virtual void handle_error() = 0;
-
-    // Worker reference for direct update_mode calls (set when added to worker)
-    // Uses Weak<Rc<PollThreadWorker>> to avoid preventing worker destruction
-    void set_worker(rusty::rc::Weak<PollThreadWorker> worker) const { worker_ = std::move(worker); }
-
-    // Returns raw pointer to worker if still alive, nullptr otherwise
-    // The returned pointer is valid for the duration of the poll loop iteration
-    PollThreadWorker* worker() const {
-        auto rc = worker_.upgrade();
-        if (rc.is_some()) {
-            // Safe: worker is guaranteed to outlive the poll loop iteration
-            return const_cast<PollThreadWorker*>(rc.unwrap().get());
-        }
-        return nullptr;
-    }
-
-protected:
-    // Mutable to allow setting through const Arc access (interior mutability)
-    mutable rusty::rc::Weak<PollThreadWorker> worker_{};
 };
 
 
@@ -249,7 +235,9 @@ class Epoll {
   // @unsafe - Waits for events and dispatches to handlers directly
   // SAFETY: Uses system calls with timeout, raw pointer safe due to deferred removal
   // userdata is Pollable* - safe to use directly because object remains in fd_to_pollable_ map
-  void Wait() {
+  // ModeUpdater: callable with signature void(Pollable*, int new_mode)
+  template<typename ModeUpdater>
+  void Wait(ModeUpdater&& update_mode) {
     const int max_nev = 100;
 #ifdef USE_KQUEUE
     struct kevent evlist[max_nev];
@@ -267,7 +255,10 @@ class Epoll {
         poll->handle_read();
       }
       if (evlist[i].filter == EVFILT_WRITE) {
-        poll->handle_write();
+        int new_mode = poll->handle_write();
+        if (new_mode != Pollable::MODE_NO_CHANGE) {
+          update_mode(poll, new_mode);
+        }
       }
 
       // handle error after handle IO, so that we can at least process something
@@ -299,7 +290,10 @@ class Epoll {
           poll->handle_read();
       }
       if (evlist[i].events & EPOLLOUT) {
-          poll->handle_write();
+          int new_mode = poll->handle_write();
+          if (new_mode != Pollable::MODE_NO_CHANGE) {
+            update_mode(poll, new_mode);
+          }
       }
       // handle error after handle IO, so that we can at least process something
       if (evlist[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
