@@ -217,6 +217,7 @@ namespace mako
         uint32_t req_nr;
         uint16_t table_id;
         uint16_t len;
+        uint8_t is_mr;  // 1 if multi-region transaction, 0 otherwise
         char key[max_key_length];
     };
 
@@ -275,6 +276,7 @@ namespace mako
         uint16_t targert_server_id; // (0-255) <= warehouses * shards
         uint32_t req_nr;
         uint16_t batch_size;
+        uint8_t is_mr;  // 1 if this is a multi-region transaction
         char data[
             sizeof(uint16_t) * max_batch_size // the table_id sequence
             + (sizeof(uint16_t) + max_key_length) * max_batch_size // the (klen, kdata) sequence
@@ -289,6 +291,7 @@ namespace mako
             request = new batch_lock_request_t;
             need_to_delete = true;
             request->batch_size = 0;
+            request->is_mr = 0;
             num_request_handled = 0;
             data_ptr = request->data;
         }
@@ -327,6 +330,10 @@ namespace mako
 
         void set_req_nr(uint64_t req_nr) {
             request->req_nr = req_nr;
+        }
+
+        void set_is_mr(uint8_t is_mr) {
+            request->is_mr = is_mr;
         }
 
         size_t get_msg_len() {

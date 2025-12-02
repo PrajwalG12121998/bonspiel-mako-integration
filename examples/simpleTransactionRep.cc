@@ -38,7 +38,7 @@ public:
         
         // Write 5 keys - unique per worker to avoid contention
         for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = mako::Encode("test_value_w" + std::to_string(worker_id_) + "_" + std::to_string(i));
             try {
@@ -62,7 +62,7 @@ public:
         // Read and verify 5 keys
         bool all_reads_ok = true;
         for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = "";
             try {
@@ -87,7 +87,7 @@ public:
             // Read and verify 5 keys
             bool all_reads_ok = true;
             for (size_t i = 0; i < 5; i++) {
-                void *txn = db->new_txn(0, arena, txn_buf());
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
                 int remote_shard = home_shard_index==0?1:0;
                 std::string key = "test_key2_w" + std::to_string(worker_id_) + "_" + std::to_string(i) + "_remote";
                 std::string value = "";
@@ -124,9 +124,13 @@ public:
 
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            // Randomly decide SR or MR transaction (20% MR, 80% SR)
+            bool is_mr = (rand() % 100) < 20;
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);
+            printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu is_mr=%d\n", home_shard_index, worker_id_, i, is_mr);
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
             try {
+                // table->get(txn, shared_key, value);
                 table->put(txn, shared_key, value);
                 db->commit_txn(txn);
                 commits++;
@@ -145,7 +149,7 @@ public:
         if (original_worker_id_ == 0) {
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena,  txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             std::string value;
             try {
                 bool exists = table->get(txn, shared_key, value);
@@ -177,7 +181,8 @@ public:
 
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+
+                    void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             // Access keys in the shared range for this group
             std::string key = "overlap_key_" + std::to_string(key_group + (i % 5));
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
@@ -206,7 +211,7 @@ public:
             int total_existing_keys = 0;
             for (int group = 0; group < 10; group++) {
                 for (size_t i = 0; i < 5; i++) {
-                    void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
                     std::string key = "overlap_key_" + std::to_string(group * 5 + i);
                     std::string value;
                     try {
@@ -239,14 +244,18 @@ public:
         // All threads access the same keys on both shards
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            // Pass is_mr = true for cross-shard (multi-region) transactions
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Created MR transaction (is_mr=true) for txn %zu\n",
+                   home_shard_index, worker_id_, i);
             std::string shared_local_key = "cross_shard_local";
             std::string shared_remote_key = "cross_shard_remote";
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
-
+            // writing on two different keys located on different shards
             try {
-                table->put(txn, shared_local_key, value);
-                table->put(txn, shared_remote_key, value);
+                // table->put(txn, shared_local_key, value);
+                // table->put(txn, shared_remote_key, value);
+                table->get(txn, shared_remote_key, value); // read to create cross-shard txn
                 db->commit_txn(txn);
                 commits++;
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] txn %zu (local:%d remote:%d) COMMITTED\n",
@@ -272,7 +281,7 @@ public:
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
             // Read to verify records on local shard
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             std::string local_key = "cross_shard_local";
             std::string local_value;
             try {
@@ -297,7 +306,7 @@ public:
 
             // Read to verify records on remote shard (sequential - after txn completes)
             {
-                void *txn2 = db->new_txn(0, arena, txn_buf());
+                void *txn2 = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
                 std::string remote_key = "cross_shard_remote";
                 std::string remote_value;
                 try {
@@ -334,7 +343,7 @@ public:
 
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
             std::string key = "rw_key_" + std::to_string(i % 3); // 3 shared keys
 
             try {
@@ -367,7 +376,7 @@ public:
 
             int existing_keys = 0;
             for (size_t i = 0; i < 3; i++) {
-                void *txn = db->new_txn(0, arena, txn_buf());
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
                 std::string key = "rw_key_" + std::to_string(i);
                 std::string value;
                 try {

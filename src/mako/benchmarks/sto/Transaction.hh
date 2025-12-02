@@ -349,6 +349,7 @@ struct __attribute__((aligned(128))) threadinfo_t {
 class Transaction {
 public:
     static constexpr unsigned tset_initial_capacity = 512;
+    bool is_mr; // is multi-region transaction
 
     static constexpr unsigned hash_size = 1024;
     static constexpr unsigned hash_step = 5;
@@ -432,7 +433,7 @@ private:
     void initialize();
 
     Transaction()
-        : threadid_(TThread::id()), is_test_(false) {
+        : threadid_(TThread::id()), is_test_(false), is_mr(false) {
         initialize();
         start();
     }
@@ -441,13 +442,20 @@ private:
     static testing_type testing;
 
     Transaction(int threadid, const testing_type&)
-        : threadid_(threadid), is_test_(true) {
+        : threadid_(threadid), is_test_(true), is_mr(false) {
         initialize();
         start();
     }
 
     Transaction(bool)
-        : threadid_(TThread::id()), is_test_(false) {
+        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr)  {
+        initialize();
+        state_ = s_aborted;
+        // init once
+        start_time = mako::getCurrentTimeMillis();
+    }
+    Transaction(bool, bool is_mr)
+        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr)  {
         initialize();
         state_ = s_aborted;
         // init once
@@ -873,14 +881,14 @@ private:
 
 class Sto {
 public:
-    static Transaction* transaction() {
+    static Transaction* transaction(bool is_mr = false) {
         if (!TThread::txn)
-            TThread::txn = new Transaction(false);
+            TThread::txn = new Transaction(false, is_mr);
         return TThread::txn;
     }
 
-    static void start_transaction() {
-        Transaction* t = transaction();
+    static void start_transaction(bool is_mr = false) {
+        Transaction* t = transaction(is_mr);
         if (TThread::mode() == 0)
             always_assert(!t->in_progress());
         t->start();

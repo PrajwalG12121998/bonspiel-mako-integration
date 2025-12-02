@@ -91,9 +91,12 @@ public:
   std::string *arena(void);
 
   bool get(void *txn, lcdf::Str key, std::string &value, size_t max_bytes_read) {
+    printf("[mbta_wrapper::get] Called, is_remote: %d\n", mbta.get_is_remote());
     if (!mbta.get_is_remote()) {
+      printf("[mbta_wrapper::get] LOCAL path - calling mbta.transGet()\n");
       STD_OP({
         bool ret = mbta.transGet(key, value);
+        printf("[mbta_wrapper::get] transGet returned: %d, value_len: %zu\n", ret, value.length());
         if (ret) {
           UPDATE_VS(value.data(),value.length())
           if (value.length() >= mako::EXTRA_BITS_FOR_VALUE) value.resize(value.length() - mako::EXTRA_BITS_FOR_VALUE);
@@ -101,7 +104,14 @@ public:
         return ret;
       });
     } else {
-      int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value);
+      bool is_mr = TThread::txn ? TThread::txn->is_mr : false;
+      printf("TEST---------------------------------------------");
+      printf("[mbta_wrapper::get] TThread::txn: %p\n", TThread::txn);
+      printf("TEST---------------------------------------------");
+      printf("[mbta_wrapper::get] REMOTE path - is_mr: %d, table_id: %llu\n", is_mr, mbta.get_table_id());
+      printf("[mbta_wrapper::get] Calling shardClient->remoteGet()\n");
+      int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value, is_mr);
+      printf("[mbta_wrapper::get] remoteGet returned: %d\n", ret);
       if (ret>0) {
         throw abstract_db::abstract_abort_exception();
       }
@@ -130,7 +140,7 @@ public:
   void set_table_name(const std::string& t) { mbta.set_table_name(t); }
 
   // handle get request from a remote shard
-  bool shard_get(lcdf::Str key, std::string &value, size_t max_bytes_read) {
+  bool shard_get(lcdf::Str key, std::string &value, size_t max_bytes_read = std::string::npos) {
     STD_OP({
       bool ret = mbta.transGet(key, value);
       return ret;
@@ -1062,8 +1072,8 @@ public:
                 uint64_t txn_flags,
                 str_arena &arena,
                 void *buf,
-                TxnProfileHint hint = HINT_DEFAULT) {
-    Sto::start_transaction();
+                TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false) {
+    Sto::start_transaction(is_mr);
     thr_arena = &arena;
     return NULL;
   }

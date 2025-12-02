@@ -103,7 +103,7 @@ public:
       uint64_t txn_flags,
       str_arena &arena,
       void *buf,
-      TxnProfileHint hint = HINT_DEFAULT) = 0;
+      TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false) = 0;
 
   typedef std::map<std::string, uint64_t> counter_map;
   typedef std::map<std::string, counter_map> txn_counter_map;

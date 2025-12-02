@@ -32,6 +32,7 @@ namespace mako
                             uint16_t server_id,
                             const string &key,
                             uint16_t table_id,
+                            bool is_mr,
                             resp_continuation_t continuation,
                             error_continuation_t error_continuation,
                             uint32_t timeout);
@@ -49,6 +50,7 @@ namespace mako
         void InvokeBatchLock(uint64_t txn_nr,
                             uint16_t id,
                             map<int, BatchLockRequestWrapper> &request_batch_per_shard,
+                            bool is_mr,
                             resp_continuation_t continuation,
                             error_continuation_t error_continuation,
                             uint32_t timeout);

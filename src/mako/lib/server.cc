@@ -15,6 +15,7 @@
 #include <x86intrin.h>
 #include "deptran/s_main.h"
 #include "benchmarks/sto/sync_util.hh"
+#include "benchmarks/sto/Transaction.hh"
 
 std::function<int()> ss_callback_ = nullptr;
 void register_sync_util_ss(std::function<int()> cb) {
@@ -291,6 +292,13 @@ namespace mako
         auto *req = reinterpret_cast<batch_lock_request_t *>(reqBuf);
         int status = ErrorCode::SUCCESS;
 
+        // Set is_mr on the server-side transaction from the request
+        if (TThread::txn) {
+            TThread::txn->is_mr = req->is_mr;
+        }
+        printf("[Server::HandleBatchLockRequest] Received request - is_mr: %d, batch_size: %d, TThread::txn->is_mr: %d\n",
+               (int)req->is_mr, (int)req->batch_size, TThread::txn ? TThread::txn->is_mr : -1);
+
         uint16_t table_id, klen, vlen;
         char *k_ptr, *v_ptr;
         auto wrapper = BatchLockRequestWrapper(reqBuf);
@@ -516,6 +524,12 @@ namespace mako
                 status = ErrorCode::ABORT;
             } else {
                 try {
+                    // Set is_mr on the server-side transaction from the request
+                    if (TThread::txn) {
+                        TThread::txn->is_mr = req->is_mr;
+                    }
+                    printf("[Server::HandleGetRequest] Received request - is_mr: %d, table_id: %d, TThread::txn->is_mr: %d\n", 
+                           (int)req->is_mr, req->table_id, TThread::txn ? TThread::txn->is_mr : -1);
                     bool ret = it->second->shard_get(obj_key0, obj_v);
                     // abort here,
                     //  "not found a key" maybe a expected behavior

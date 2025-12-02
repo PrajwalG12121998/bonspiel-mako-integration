@@ -10,10 +10,10 @@
 #include <string_view>
 #include <vector>
 
-#include "abstract_ordered_index.h"
+#include "abstract_ordered_index.h" 
 #include "benchmarks/benchmark_config.h"
 
-class mbta_sharded_ordered_index {
+class  mbta_sharded_ordered_index {
 public:
   mbta_sharded_ordered_index(
       std::string name,

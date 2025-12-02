@@ -163,7 +163,6 @@ public:
   }
 
 
-
   virtual const char *
   put(void *txn,
       const std::string &key,

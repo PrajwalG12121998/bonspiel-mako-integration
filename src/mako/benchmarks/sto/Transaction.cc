@@ -43,6 +43,7 @@ __thread bool TThread::isRemoteShard;
 __thread int TThread::skipBeforeRemotePayment;
 __thread unsigned int TThread::readset_shard_bits;
 __thread unsigned int TThread::writeset_shard_bits;
+__thread bool TThread::is_multi_region_txn;
 Transaction::epoch_state __attribute__((aligned(128))) Transaction::global_epochs = {
     1, 0, TransactionTid::increment_value, true
 };
@@ -200,13 +201,25 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
 #endif
     }
 
+    // For MR transactions, unreserve all reserved records in the readset
+    if (is_mr) {
+        TransItem* it = nullptr;
+        for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+            it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
+            if (it->has_read()) {
+                // Use TObject interface to unreserve (similar to how unlock is called)
+                it->owner()->unreserve(*it);
+            }
+        }
+    }
+
     TXP_ACCOUNT(txp_max_transbuffer, buf_.buffer_size());
     TXP_ACCOUNT(txp_total_transbuffer, buf_.buffer_size());
 
     TransItem* it;
     if (!any_writes_)
         goto after_unlock;
-
+ 
     if (committed && !STO_SORT_WRITESET) {
         for (unsigned* idxit = writeset + nwriteset; idxit != writeset; ) {
             --idxit;
@@ -265,6 +278,13 @@ bool Transaction::shard_try_lock_last_writeset() {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
         if (it->has_write()) {
+            // For SR transactions, check if the record is reserved by an MR transaction
+            if (!is_mr) {
+                if (it->owner()->is_reserved(*it)) {
+                    // SR transaction cannot acquire lock on a reserved record
+                    return false;
+                }
+            }
             if (!it->owner()->lock(*it, *this)) {
                 return false;
             }
@@ -346,6 +366,20 @@ void Transaction::shard_unlock(bool committed) {
 
     TransItem* it = nullptr;
     if (tset_size_ == 0) return;
+
+    // For MR transactions, unreserve all reserved records in the readset
+    if (is_mr) {
+        for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+            auto base = tset_[tidx / tset_chunk];
+            it = base + tidx % tset_chunk;
+            if (it->has_read()) {
+                // Use TObject interface to unreserve (similar to how unlock is called)
+                it->owner()->unreserve(*it);
+            }
+            if (tidx == 0) break;
+        }
+    }
+
     for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
@@ -424,7 +458,8 @@ bool Transaction::try_commit(bool no_paxos) {
         }
     }
 
-    int ret = TThread::sclient->remoteBatchLock(remote_table_id_batch, key_batch, value_batch);
+    int ret = TThread::sclient->remoteBatchLock(remote_table_id_batch, key_batch, value_batch, is_mr);
+    
     if (ret > 0) {
         goto abort;
     }
@@ -433,6 +468,14 @@ bool Transaction::try_commit(bool no_paxos) {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         bool isRemote = it->owner()->get_is_remote();
         if (it->has_write()) {
+            // For SR transactions on local writes, check if the record is reserved by an MR transaction
+            if (!isRemote && !is_mr) {
+                if (it->owner()->is_reserved(*it)) {
+                    // SR transaction cannot acquire lock on a reserved record
+                    mark_abort_because(it, "record reserved by MR txn");
+                    goto abort;
+                }
+            }
             writeset[nwriteset++] = tidx;
 #if !STO_SORT_WRITESET
             //   nwriteset >= 1 should make more sense, not == 1

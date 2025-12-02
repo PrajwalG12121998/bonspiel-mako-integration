@@ -41,6 +41,7 @@ public:
     static __thread bool isHomeWarehouse;
     static __thread bool isRemoteShard;
     static __thread int skipBeforeRemotePayment;
+    static __thread bool is_multi_region_txn;
     static __thread Transaction* txn;
     // for each worker thread, it has a erpc client to issue erpc request
     static __thread mako::ShardClient* sclient;
@@ -64,6 +65,9 @@ public:
     // it is just for the transaction counter
     static __thread int increment_id;
     static __thread bool is_worker_leader;
+
+    // multi region support (not in use)
+    static __thread bool is_multi_region_tx;
 
     static void set_mode(int mode) {
         the_mode = mode;
@@ -182,8 +186,68 @@ public:
     static constexpr type nonopaque_bit = type(0x400);
     //    100  000  000  000
     static constexpr type user_bit = type(0x800);
-    //100 000  000  000  000
-    static constexpr type increment_value = type(0x4000);
+    
+    // Reservation counter for MR transactions (bits 12-15, 4 bits, max 15 concurrent reservations)
+    static constexpr type reservation_mask = type(0xF000);   // bits 12-15
+    static constexpr type reservation_inc = type(0x1000);    // increment by 1 in reservation field
+    static constexpr type reservation_max = type(0xF);       // max 15 reservations
+    static constexpr int reservation_shift = 12;
+    
+    // TID increment now starts at bit 16
+    static constexpr type increment_value = type(0x10000);
+    // 64 - 16 = 48 bits for TID 2^48 = 281474976710656
+
+    // Reservation counter methods for MR transactions
+    // MR transactions call this during read phase to reserve records
+    // Must wait if record is locked (by another transaction in commit phase)
+    static bool try_reserve(type& v) {
+        while (true) {
+            type old_v = v;
+            
+            // Wait if record is locked (someone is in commit phase)
+            if (is_locked(old_v)) {
+                relax_fence();
+                continue;  // Spin until unlocked
+            }
+            
+            // Check if max reservations reached
+            type count = (old_v & reservation_mask) >> reservation_shift;
+            if (count >= reservation_max) {
+                return false;  // Max reservations reached
+            }
+            
+            // Try to atomically increment reservation counter
+            type new_v = old_v + reservation_inc;
+            if (bool_cmpxchg(&v, old_v, new_v)) {
+                return true;
+            }
+            relax_fence();
+        }
+    }
+
+    static void unreserve(type& v) {
+        type old_v = v;
+        assert((old_v & reservation_mask) >= reservation_inc);
+        __sync_fetch_and_sub(&v, reservation_inc);
+    }
+
+    static type reservation_count(type v) {
+        return (v & reservation_mask) >> reservation_shift;
+    }
+
+    static unsigned long print_reservation_count(type v) {
+        return (unsigned long)reservation_count(v);
+    }
+
+    static bool is_reserved(type v) {
+        return (v & reservation_mask) != 0;
+    }
+
+    
+
+    static void clear_reservations(type& v) {
+        v = v & ~reservation_mask;
+    }
 
     // TODO: probably remove these once RBTree stops referencing them.
     static void lock_read(type& v) {
@@ -204,6 +268,7 @@ public:
         }
         acquire_fence();
     }
+    
     // for use with lock_write() and lock_read() (should probably be a different class altogether...)
     // it could theoretically be useful to have an opacity-safe reader-writer lock (which this is not currently)
     static void inc_write_version(type& v) {
@@ -365,13 +430,20 @@ public:
     static bool check_version(type cur_vers, type old_vers) {
         assert(!is_locked_elsewhere(old_vers));
         // cur_vers allowed to be locked by us
-        //Warning("a:%d,b:%d",cur_vers == old_vers, cur_vers == (old_vers | lock_bit | TThread::id()));
-        return cur_vers == old_vers || cur_vers == (old_vers | lock_bit | TThread::id());
+        // Mask out reservation bits - they don't affect data correctness
+        type mask = ~reservation_mask;
+        type cur_masked = cur_vers & mask;
+        type old_masked = old_vers & mask;
+        return cur_masked == old_masked || cur_masked == (old_masked | lock_bit | TThread::id());
     }
     static bool check_version(type cur_vers, type old_vers, int here) {
         assert(!is_locked_elsewhere(old_vers));
         // cur_vers allowed to be locked by us
-        return cur_vers == old_vers || cur_vers == (old_vers | lock_bit | here);
+        // Mask out reservation bits - they don't affect data correctness
+        type mask = ~reservation_mask;
+        type cur_masked = cur_vers & mask;
+        type old_masked = old_vers & mask;
+        return cur_masked == old_masked || cur_masked == (old_masked | lock_bit | here);
     }
     static bool try_check_opacity(type start_tid, type v) {
         signed_type delta = start_tid - v;
@@ -749,6 +821,15 @@ public:
     virtual bool check(TransItem& item, Transaction& txn) = 0;
     virtual void install(TransItem& item, Transaction& txn) = 0;
     virtual void unlock(TransItem& item) = 0;
+    virtual void unreserve(TransItem& item) {
+        // Default implementation does nothing - only MassTrans overrides this for MR transactions
+        (void) item;
+    }
+    virtual bool is_reserved(TransItem& item) {
+        // Default implementation returns false - only MassTrans overrides this for MR transactions
+        (void) item;
+        return false;
+    }
     virtual void cleanup(TransItem& item, bool committed) {
         (void) item, (void) committed;
     }

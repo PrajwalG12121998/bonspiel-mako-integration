@@ -91,6 +91,15 @@ run_simple_transaction() {
     ./build/simpleTransaction
 }
 
+# Run simple transaction rep
+run_simple_transaction_rep() {
+    echo "========================================="
+    echo "Running: ./ci/ci.sh simpleTransactionRep"
+    echo "========================================="
+    cleanup_processes
+    ./build/simpleTransactionRep 2 0 6 localhost 1
+}
+
 # Function 3: Run simple Paxos test
 run_simple_paxos() {
     echo "========================================="
@@ -293,6 +302,9 @@ case "${1:-}" in
         ;;
     simpleTransaction)
         run_simple_transaction
+        ;;
+    simpleTransactionRep)
+        run_simple_transaction_rep
         ;;
     simplePaxos)
         run_simple_paxos

@@ -33,6 +33,7 @@ class TransItem {
 
     static constexpr TransItem::flags_type minsert_bit = user0_bit;
     static constexpr TransItem::flags_type mdelete_bit = user0_bit<<1;
+    static constexpr TransItem::flags_type reserved_bit = user0_bit<<2;  // Bit 50: tracks if THIS txn reserved this key
 
     TransItem() = default;
     TransItem(TObject* owner, void* k)

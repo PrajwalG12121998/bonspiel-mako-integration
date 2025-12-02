@@ -123,21 +123,31 @@ public:
 
   template <typename ValType>
   bool transGet(Str key, ValType& retval, threadinfo_type& ti = mythreadinfo) {
+    bool is_mr = TThread::txn ? TThread::txn->is_mr : false;
+    printf("[MassTrans::transGet] Called, is_mr: %d\n", is_mr);
     // if false:
     //   1) not found a key
     //   2) found a key, but updated by other writes 
     /// in the original implement, throw exception to distinguish case2
     unlocked_cursor_type lp(table_, key);
     bool found = lp.find_unlocked(*ti.ti);
+    printf("[MassTrans::transGet] Key lookup found: %d\n", found);
     if (found) {
       versioned_value *e = lp.value();
+      printf("[MassTrans::transGet] Version: 0x%lx, is_locked: %d, is_reserved: %d\n", 
+             (unsigned long)e->version(), 
+             TransactionTid::is_locked(e->version()),
+             TransactionTid::is_reserved(e->version()));
       auto item = t_read_only_item(e);
+      // checking if this key valid to read for this transaction or not
       if (!validityCheck(item, e)) { 
+        printf("[MassTrans::transGet] validityCheck FAILED\n");
         //
         Sto::abort_without_throw(); // Sto::abort(); // this throw an error
         TThread::transget_without_throw=true;
         return false;
       }
+      printf("[MassTrans::transGet] validityCheck passed\n");
 // #if READ_MY_WRITES  // it's always false by default
 //       if (has_delete(item)) {
 //         return false;
@@ -153,13 +163,33 @@ public:
 //       }
 // #endif
       Version elem_vers;
-      if(!atomicRead(e, elem_vers, retval)){ // atomicRead might throw an error as well
-        return false;
+      
+      if(is_mr) {
+        // For MR transactions, use atomicReadWithReserve which:
+        // 1. Reserves the key
+        // 2. Reads the value
+        // 3. Adds to readset (so unreserve happens on abort/commit)
+        if(!atomicReadWithReserve(e, elem_vers, retval, item, key)) {
+          printf("[MassTrans::transGet] atomicReadWithReserve FAILED\n");
+          return false;
+        }
+      } else {
+        // For SR transactions, use regular atomicRead
+        if(!atomicRead(e, elem_vers, retval)) {
+          printf("[MassTrans::transGet] atomicRead FAILED\n");
+          return false;
+        }
+        item.observe(tversion_type(elem_vers));
       }
-      item.observe(tversion_type(elem_vers));
-      if (TThread::is_multiversion())
+
+      printf("[MassTrans::transGet] Read succeeded, elem_vers: 0x%lx\n", (unsigned long)elem_vers);
+      if (TThread::is_multiversion()) {
+        printf("[MassTrans::transGet] multiversion enabled, calling mvGET\n");
         return MultiVersionValue::mvGET(retval, (char*)e->data(), TThread::txn->get_current_term(), sync_util::sync_logger::hist_timestamp);
+      }
+      printf("[MassTrans::transGet] returning found=true\n");
     } else {
+      printf("[MassTrans::transGet] Key NOT found, calling ensureNotFound\n");
       //Warning("Not found a value");
       ensureNotFound(lp.node(), lp.full_version_value());
     }
@@ -530,6 +560,31 @@ public:
     unlock(&e->version());
   }
 
+  // Reservation methods for MR transactions
+  bool try_reserve(versioned_value *e) {
+    return TransactionTid::try_reserve(e->version());
+  }
+  void unreserve(versioned_value *e) {
+    unsigned long count_current = (unsigned long)TransactionTid::reservation_count(e->version());
+    printf("[MassTrans::unreserve(vv)] Called. Current version: 0x%lx, reservation_count: %lu, is_reserved: %d\n",
+           (unsigned long)e->version(), count_current, TransactionTid::is_reserved(e->version()));
+    // Only unreserve if actually reserved (count > 0)
+    if (TransactionTid::is_reserved(e->version())) {
+      unsigned long count_before = (unsigned long)TransactionTid::reservation_count(e->version());
+      TransactionTid::unreserve(e->version());
+      unsigned long count_after = (unsigned long)TransactionTid::reservation_count(e->version());
+      printf("[MassTrans::unreserve(vv)] Unreserved: count %lu -> %lu\n", count_before, count_after);
+    } else {
+      printf("[MassTrans::unreserve(vv)] SKIPPED - not reserved (count=0)\n");
+    }
+  }
+  bool is_reserved(versioned_value *e) {
+    return TransactionTid::is_reserved(e->version());
+  }
+  void clear_reservations(versioned_value *e) {
+    TransactionTid::clear_reservations(e->version());
+  }
+
     bool lock(TransItem& item, Transaction& txn) override {
         versioned_value* vv = item.key<versioned_value*>();
         return txn.try_lock(item, vv->version());
@@ -621,6 +676,28 @@ public:
 
   void unlock(TransItem& item) override {
       unlock(item.key<versioned_value*>());
+  }
+
+  void unreserve(TransItem& item) override {
+      // Skip internode items (node version checks) - they don't have reservations
+      if (is_inter(item)) {
+          return;
+      }
+      // Only unreserve if THIS transaction reserved this key (tracked via reserved_bit flag)
+      if (item.has_flag(TransItem::reserved_bit)) {
+          printf("[MassTrans::unreserve(TransItem)] reserved_bit is SET, calling unreserve\n");
+          unreserve(item.key<versioned_value*>());
+      } else {
+          printf("[MassTrans::unreserve(TransItem)] reserved_bit NOT set, skipping unreserve\n");
+      }
+  }
+
+  bool is_reserved(TransItem& item) override {
+      // Skip internode items (node version checks) - they don't have reservations
+      if (is_inter(item)) {
+          return false;
+      }
+      return is_reserved(item.key<versioned_value*>());
   }
 
   void cleanup(TransItem& item, bool committed) override {
@@ -862,6 +939,44 @@ protected:
       vers = e->version();
       fence();
     } while (vers != v2);
+    return true;
+  }
+
+  // Atomic read with reservation for MR transactions
+  // This reserves the key, reads the value, and adds to readset atomically
+  // Returns false if reservation fails
+  static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item, Str key) {
+    // First, reserve the key - this spins if locked, then reserves atomically
+    printf("[MassTrans::atomicReadWithReserve] Attempting to reserve key=%.*s. Current version: 0x%lx, reservation_count: %lu\n",
+           (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
+    bool reserved = TransactionTid::try_reserve(e->version());
+    printf("[MassTrans::atomicReadWithReserve] try_reserve returned: %d, key=%.*s, new version: 0x%lx, reservation_count: %lu\n",
+           reserved, (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
+    
+    if (!reserved) {
+      // Reservation failed (max reservations reached)
+      Sto::abort_without_throw();
+      TThread::transget_without_throw = true;
+      return false;
+    }
+    
+    // Reservation succeeded - mark this TransItem as having reserved
+    item.add_flags(TransItem::reserved_bit);
+    
+    // Do a consistent read (version check loop for memory visibility)
+    Version v2;
+    do {
+      v2 = e->version();
+      fence();
+      assign_val(val, e->read_value());
+      fence();
+      vers = e->version();
+      fence();
+    } while (vers != v2);
+    
+    item.observe(tversion_type(vers));
+    
+    printf("[MassTrans::atomicReadWithReserve] Read succeeded, vers: 0x%lx\n", (unsigned long)vers);
     return true;
   }
 

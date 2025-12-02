@@ -51,8 +51,9 @@ namespace transport
         bool is_leader;
         int shard_id;
         int replica_idx;
+        string region;
         
-        SiteInfo() : id(-1), port(0), is_leader(false), shard_id(-1), replica_idx(-1) {}
+        SiteInfo() : id(-1), port(0), is_leader(false), shard_id(-1), replica_idx(-1), region("") {}
     };
 
     class Configuration

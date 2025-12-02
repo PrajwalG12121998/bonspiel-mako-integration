@@ -61,6 +61,27 @@ struct versioned_value_struct /*: public threadinfo::rcu_callback*/ {
     ti.deallocate(this, sizeof(versioned_value_struct), memtag_value);
   }
 #endif
+
+  // Reservation counter methods - delegate to TransactionTid
+  inline bool try_reserve() {
+    return TransactionTid::try_reserve(version_);
+  }
+
+  inline void unreserve() {
+    TransactionTid::unreserve(version_);
+  }
+
+  inline version_type reservation_count() const {
+    return TransactionTid::reservation_count(version_);
+  }
+
+  inline bool is_reserved() const {
+    return TransactionTid::is_reserved(version_);
+  }
+
+  inline void clear_reservations() {
+    TransactionTid::clear_reservations(version_);
+  }
   
 private: 
   version_type version_;
@@ -107,6 +128,27 @@ public:
   inline void deallocate_rcu(threadinfo& ti) {
     // XXX: really this one needs to be a rcu_callback so we can call destructor
     ti.deallocate_rcu(this, sizeof(versioned_value_struct), memtag_value);
+  }
+
+  // Reservation counter methods - delegate to TransactionTid
+  inline bool try_reserve() {
+    return TransactionTid::try_reserve(version_);
+  }
+
+  inline void unreserve() {
+    TransactionTid::unreserve(version_);
+  }
+
+  inline version_type reservation_count() const {
+    return TransactionTid::reservation_count(version_);
+  }
+
+  inline bool is_reserved() const {
+    return TransactionTid::is_reserved(version_);
+  }
+
+  inline void clear_reservations() {
+    TransactionTid::clear_reservations(version_);
   }
   
 private:

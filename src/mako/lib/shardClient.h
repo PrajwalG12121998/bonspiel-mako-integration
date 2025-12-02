@@ -15,7 +15,7 @@ namespace mako
     {
     public:
         ShardClient(std::string file, string cluster, int shardIndex, int par_id);
-        int remoteGet(int remote_table_id, std::string key, std::string &value);
+        int remoteGet(int remote_table_id, std::string key, std::string &value, bool is_mr = false);
         int remoteScan(int remote_table_id, std::string start_key, std::string end_key, std::string &value);
         // Single timestamp interfaces
         int remoteGetTimestamp(uint32_t &timestamp);
@@ -23,7 +23,7 @@ namespace mako
         int remoteControl(int control, uint32_t value, uint32_t &ret_value, uint64_t set_bits);
         int remoteAbort();
         int remoteLock(int remote_table_id, std::string key, std::string &value);
-        int remoteBatchLock(vector<int> &remote_table_id_batch, vector<string> &key_batch, vector<string> &value_batch);
+        int remoteBatchLock(vector<int> &remote_table_id_batch, vector<string> &key_batch, vector<string> &value_batch, bool is_mr);
         int remoteValidate(uint32_t &watermark);
         int remoteInstall(uint32_t timestamp);
         int remoteUnLock();

@@ -388,6 +388,7 @@ namespace mako
         uint64_t txn_nr,
         uint16_t server_id,
         map<int, BatchLockRequestWrapper> &request_batch_per_shard,
+        bool is_mr,
         resp_continuation_t continuation,
         error_continuation_t error_continuation,
         uint32_t timeout
@@ -408,6 +409,7 @@ namespace mako
 
         for (auto &it: request_batch_per_shard) {
             it.second.set_req_nr(reqId + current_term);
+            it.second.set_is_mr(is_mr ? 1 : 0);
             data_to_send[it.first] = make_pair((char*)it.second.get_request_ptr(), it.second.get_msg_len());
         }
         blocked = true;
@@ -519,6 +521,7 @@ namespace mako
                            uint16_t server_id,
                            const string &key,
                            uint16_t table_id,
+                           bool is_mr,
                            resp_continuation_t continuation,
                            error_continuation_t error_continuation,
                            uint32_t timeout)
@@ -526,6 +529,8 @@ namespace mako
         uint32_t reqId = ++lastReqId;
         reqId *= 10;
 
+        printf("[Client::InvokeGet] Called - txn_nr: %lu, dstShardIdx: %d, table_id: %d, is_mr: %d\n",
+               txn_nr, dstShardIdx, table_id, is_mr);
         //Warning("invoke InvokeGet,txn_nr:%d,par_id:%d,id:%d",txn_nr,TThread::getPartitionID(),TThread::id());
         Debug("invoke InvokeGet\n");
         crtReqK =
@@ -547,6 +552,9 @@ namespace mako
         reqBuf->targert_server_id = server_id;
         reqBuf->req_nr = reqId + current_term;
         reqBuf->len = key.size();
+        reqBuf->is_mr = is_mr ? 1 : 0;
+        printf("[Client::InvokeGet] Request buffer set - req_nr: %u, is_mr in packet: %d\n", 
+               reqBuf->req_nr, reqBuf->is_mr);
         ASSERT_LT(key.size(), max_key_length);
 
         memcpy(reqBuf->key, key.c_str(), key.size());
@@ -554,6 +562,7 @@ namespace mako
 
         size_t bytes_used = sizeof(get_request_t) - max_key_length + reqBuf->len;
 
+        printf("[Client::InvokeGet] Sending request to shard %d\n", dstShardIdx);
         blocked = true;
         transport->SendRequestToShard(this,
                                       getReqType,

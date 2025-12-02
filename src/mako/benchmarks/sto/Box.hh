@@ -85,6 +85,23 @@ public:
         unlock_local();
     }
 
+    // Reservation methods for MR transactions
+    bool try_reserve() {
+        return TransactionTid::try_reserve(s_.version());
+    }
+    
+    void unreserve() {
+        TransactionTid::unreserve(s_.version());
+    }
+    
+    bool is_reserved() const {
+        return TransactionTid::is_reserved(s_.version());
+    }
+    
+    void clear_reservations() {
+        TransactionTid::clear_reservations(s_.version());
+    }
+
     bool is_locked_elsewhere() const {
         return TransactionTid::is_locked_elsewhere(s_.version());
     }

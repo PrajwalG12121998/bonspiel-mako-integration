@@ -31,7 +31,7 @@ public:
 
         // Write 5 keys
         for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true);
             std::string key = "test_key_" + std::to_string(i);
             std::string value = mako::Encode("test_value_" + std::to_string(i));
             try {
@@ -50,12 +50,18 @@ public:
         // Read and verify 5 keys
         bool all_reads_ok = true;
         for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true);
+            printf("\n[simpleTransaction] === Starting READ transaction for key %zu ===\n", i);
+            printf("[simpleTransaction] Transaction is_mr: %d\n", TThread::txn ? TThread::txn->is_mr : -1);
             std::string key = "test_key_" + std::to_string(i);
             std::string value = "";
             try {
+                printf("[simpleTransaction] Calling table->get() for key: %s\n", key.c_str());
                 table->get(txn, key, value);
+                table->get(txn, key, value); // read twice to test reservation
+                printf("[simpleTransaction] table->get() returned, calling commit_txn()\n");
                 db->commit_txn(txn);
+                printf("[simpleTransaction] commit_txn() completed\n");
                 
                 std::string expected = "test_value_" + std::to_string(i);
                 if (value.substr(0, expected.length()) != expected) {
@@ -94,7 +100,7 @@ public:
         // Write initial value
         // Add more extra bits in DO_STRUCT_COMMON_VALUE in previous codebase
         {
-            void *txn = db->new_txn(0, arena, txn_buf());
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true);
             scoped_str_arena s_arena(arena);
             std::string key = "overwrite_key";
             std::string value = mako::Encode("initial_2000");

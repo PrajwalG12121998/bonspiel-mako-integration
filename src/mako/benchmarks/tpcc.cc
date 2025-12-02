@@ -1606,9 +1606,16 @@ tpcc_worker::txn_new_order_simple() {
       int oorder_id = local_oorder_id * 100 + TThread::getPartitionID();
       ids.push_back(oorder_id);
       bool is_remote=false;
+      // Determine if this transaction will access remote shard (is_mr)
+      bool is_mr = (remote_warehouse_id > 0 && 
+                    !WarehouseInShard(remote_warehouse_id, BenchmarkConfig::getInstance().getShardIndex()) && 
+                    (c_id == 4 || c_id == 5));
       retry:
       arena.reset();
-      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT);
+      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);
+      if (is_mr) {
+        printf("[tpcc::txn_new_order_simple] Created MR transaction for c_id=%d, remote_warehouse=%d\n", c_id, remote_warehouse_id);
+      }
       try {
         // Tranasction-1
         {
@@ -2056,7 +2063,10 @@ tpcc_worker::txn_new_order_mega()
   //   max_read_set_size : 15
   //   max_write_set_size : 15
   //   num_txn_contexts : 9
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
+  if (isRemote) {
+    printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order_mega()\n");
+  }
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER, isRemote);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;
@@ -2341,7 +2351,10 @@ tpcc_worker::txn_new_order()
   //   max_read_set_size : 15
   //   max_write_set_size : 15
   //   num_txn_contexts : 9
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
+  if (isRemote) {
+    printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order()\n");
+  }
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER, isRemote);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;

@@ -55,4 +55,25 @@ struct versioned_str_struct : public versioned_str {
   inline void deallocate_rcu(threadinfo& ti) {
     ti.deallocate_rcu(this, this->capacity() + sizeof(versioned_str_struct), memtag_value);
   }
+
+  // Reservation counter methods - delegate to TransactionTid
+  inline bool try_reserve() {
+    return TransactionTid::try_reserve(stuff());
+  }
+
+  inline void unreserve() {
+    TransactionTid::unreserve(stuff());
+  }
+
+  inline version_type reservation_count() const {
+    return TransactionTid::reservation_count(stuff());
+  }
+
+  inline bool is_reserved() const {
+    return TransactionTid::is_reserved(stuff());
+  }
+
+  inline void clear_reservations() {
+    TransactionTid::clear_reservations(stuff());
+  }
 };
