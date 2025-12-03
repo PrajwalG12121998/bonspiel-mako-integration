@@ -306,12 +306,38 @@ public:
     }
 
     static bool try_lock(type& v) {
-        type vv = v;
+        type vv = v; // fixed snapshot
         return bool_cmpxchg(&v, vv & ~lock_bit, vv | lock_bit | TThread::id());
     }
     static bool try_lock(type& v, int here) {
         type vv = v;
         return bool_cmpxchg(&v, vv & ~lock_bit, vv | lock_bit | here);
+    }
+    
+    // Atomic try_lock that only succeeds if record is NOT reserved (for SR transactions)
+    // Single CAS: only acquire lock if both unlocked AND unreserved
+    // Returns: 0 = success, 1 = lock contention/retry, 2 = reserved by MR
+    static int try_lock_if_not_reserved(type& v, int here) {
+        type vv = v;
+        
+        // Check reservation - if reserved, fail immediately
+        if (vv & reservation_mask) {
+            return 2;  // Reserved by MR - abort
+        }
+        
+        // Check lock - if locked, fail immediately  
+        if (vv & lock_bit) {
+            return 1;  // Lock contention - retry
+        }
+        
+        // CAS: expect exactly vv (unlocked, unreserved), set lock bit
+        // If anything changed between reads and CAS, CAS fails and caller retries
+        type desired = vv | lock_bit | here;
+        if (bool_cmpxchg(&v, vv, desired)) {
+            return 0;  // Success - atomically verified unlocked+unreserved and acquired lock
+        }
+        
+        return 1;  // CAS failed - retry (next attempt will re-check reservation)
     }
 
     static bool try_lock(type& v, int here, uint8_t term) {
@@ -813,6 +839,12 @@ public:
     virtual ~TObject() {}
 
     virtual bool lock(TransItem& item, Transaction& txn) = 0;
+    // Atomic lock that fails if reserved (for SR transactions)
+    // Returns: 0 = success, 1 = contention, 2 = reserved by MR
+    virtual int lock_if_not_reserved(TransItem& item, Transaction& txn) {
+        // Default implementation just calls lock() - MassTrans overrides this
+        return lock(item, txn) ? 0 : 1;
+    }
     virtual bool check_predicate(TransItem& item, Transaction& txn, bool committing) {
         (void) item, (void) txn, (void) committing;
 	//        always_assert(false);

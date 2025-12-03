@@ -10,11 +10,12 @@
 #include "benchmarks/benchmark_config.h"
 
 #ifndef MAX
-#define MAX(a,b) ((a)>(b)?(a):(b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
 std::function<int()> callback_ = nullptr;
-void register_sync_util(std::function<int()> cb) {
+void register_sync_util(std::function<int()> cb)
+{
     callback_ = cb;
 }
 
@@ -45,8 +46,7 @@ __thread unsigned int TThread::readset_shard_bits;
 __thread unsigned int TThread::writeset_shard_bits;
 __thread bool TThread::is_multi_region_txn;
 Transaction::epoch_state __attribute__((aligned(128))) Transaction::global_epochs = {
-    1, 0, TransactionTid::increment_value, true
-};
+    1, 0, TransactionTid::increment_value, true};
 __thread Transaction *TThread::txn = nullptr;
 __thread mako::ShardClient *TThread::sclient = nullptr;
 __thread HashWrapper *TThread::tprops = nullptr;
@@ -56,13 +56,15 @@ TransactionTid::type __attribute__((aligned(128))) Transaction::_TID = 1;
 #else
 TransactionTid::type __attribute__((aligned(128))) Transaction::_TID = 2 * TransactionTid::increment_value;
 #endif
-   // reserve TransactionTid::increment_value for prepopulated
+// reserve TransactionTid::increment_value for prepopulated
 
-static void __attribute__((used)) check_static_assertions() {
+static void __attribute__((used)) check_static_assertions()
+{
     static_assert(sizeof(threadinfo_t) % 128 == 0, "threadinfo is 2-cache-line aligned");
 }
 
-void Transaction::initialize() {
+void Transaction::initialize()
+{
     static_assert(tset_initial_capacity % tset_chunk == 0, "tset_initial_capacity not an even multiple of tset_chunk");
     hash_base_ = 32768;
     tset_size_ = 0;
@@ -73,16 +75,18 @@ void Transaction::initialize() {
         tset_[i] = nullptr;
 }
 
-Transaction::~Transaction() {
+Transaction::~Transaction()
+{
     if (in_progress())
         silent_abort();
-    TransItem* live = tset0_;
+    TransItem *live = tset0_;
     for (unsigned i = 0; i != arraysize(tset_); ++i, live += tset_chunk)
         if (live != tset_[i])
             delete[] tset_[i];
 }
 
-void Transaction::refresh_tset_chunk() {
+void Transaction::refresh_tset_chunk()
+{
     assert(tset_size_ % tset_chunk == 0);
     assert(tset_size_ < tset_max_capacity);
     if (!tset_[tset_size_ / tset_chunk])
@@ -90,17 +94,20 @@ void Transaction::refresh_tset_chunk() {
     tset_next_ = tset_[tset_size_ / tset_chunk];
 }
 
-void* Transaction::epoch_advancer(void*) {
+void *Transaction::epoch_advancer(void *)
+{
     static int num_epoch_advancers = 0;
     if (fetch_and_add(&num_epoch_advancers, 1) != 0)
         std::cerr << "WARNING: more than one epoch_advancer thread\n";
 
     // don't bother epoch'ing til things have picked up
     usleep(100000);
-    while (global_epochs.run) {
+    while (global_epochs.run)
+    {
         epoch_type g = global_epochs.global_epoch;
         epoch_type e = g;
-        for (auto& t : tinfo) {
+        for (auto &t : tinfo)
+        {
             if (t.epoch != 0 && signed_epoch_type(t.epoch - e) < 0)
                 e = t.epoch;
         }
@@ -117,19 +124,21 @@ void* Transaction::epoch_advancer(void*) {
     return NULL;
 }
 
-bool Transaction::preceding_duplicate_read(TransItem* needle) const {
-    const TransItem* it = nullptr;
-    for (unsigned tidx = 0; ; ++tidx) {
+bool Transaction::preceding_duplicate_read(TransItem *needle) const
+{
+    const TransItem *it = nullptr;
+    for (unsigned tidx = 0;; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (it == needle)
             return false;
-        if (it->owner() == needle->owner() && it->key_ == needle->key_
-            && it->has_read())
+        if (it->owner() == needle->owner() && it->key_ == needle->key_ && it->has_read())
             return true;
     }
 }
 
-void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
+void Transaction::hard_check_opacity(TransItem *item, TransactionTid::type t)
+{
     // ignore opacity checks during commit; we're in the middle of checking
     // things anyway
     if (state_ == s_committing || state_ == s_committing_locked)
@@ -140,7 +149,8 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
         return;
 
     // die on recursive opacity check; this is only possible for predicates
-    if (unlikely(state_ == s_opacity_check)) {
+    if (unlikely(state_ == s_opacity_check))
+    {
         mark_abort_because(item, "recursive opacity check", t);
     abort:
         TXP_INCREMENT(txp_hco_abort);
@@ -149,7 +159,8 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
     assert(state_ == s_in_progress);
 
     TXP_INCREMENT(txp_hco);
-    if (TransactionTid::is_locked_elsewhere(t, threadid_)) {
+    if (TransactionTid::is_locked_elsewhere(t, threadid_))
+    {
         TXP_INCREMENT(txp_hco_lock);
         mark_abort_because(item, "locked", t);
         goto abort;
@@ -160,19 +171,24 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
     state_ = s_opacity_check;
     start_tid_ = _TID;
     release_fence();
-    TransItem* it = nullptr;
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    TransItem *it = nullptr;
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
-        if (it->has_read()) {
+        if (it->has_read())
+        {
             TXP_INCREMENT(txp_total_check_read);
-            if (!it->owner()->check(*it, *this)
-                && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
+            if (!it->owner()->check(*it, *this) && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
+            {
                 mark_abort_because(item, "opacity check");
                 goto abort;
             }
-        } else if (it->has_predicate()) {
+        }
+        else if (it->has_predicate())
+        {
             TXP_INCREMENT(txp_total_check_predicate);
-            if (!it->owner()->check_predicate(*it, *this, false)) {
+            if (!it->owner()->check_predicate(*it, *this, false))
+            {
                 mark_abort_because(item, "opacity check_predicate");
                 goto abort;
             }
@@ -181,11 +197,14 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
     state_ = s_in_progress;
 }
 
-void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
-    if (!committed) {
+void Transaction::stop(bool committed, unsigned *writeset, unsigned nwriteset)
+{
+    if (!committed)
+    {
         TXP_INCREMENT(txp_total_aborts);
 #if STO_DEBUG_ABORTS
-        if (local_random() <= uint32_t(0xFFFFFFFF * STO_DEBUG_ABORTS_FRACTION)) {
+        if (local_random() <= uint32_t(0xFFFFFFFF * STO_DEBUG_ABORTS_FRACTION))
+        {
             std::ostringstream buf;
             buf << "$" << (threadid_ < 10 ? "0" : "") << threadid_
                 << " abort " << state_name(state_);
@@ -202,11 +221,16 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
     }
 
     // For MR transactions, unreserve all reserved records in the readset
-    if (is_mr) {
-        TransItem* it = nullptr;
-        for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    printf("[Transaction::stop] is_mr=%d, tset_size_=%u\n", is_mr, tset_size_);
+    if (is_mr)
+    {
+        TransItem *it = nullptr;
+        for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+        {
             it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
-            if (it->has_read()) {
+            printf("[Transaction::stop] tidx=%u, has_read=%d\n", tidx, it->has_read());
+            if (it->has_read())
+            {
                 // Use TObject interface to unreserve (similar to how unlock is called)
                 it->owner()->unreserve(*it);
             }
@@ -216,12 +240,14 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
     TXP_ACCOUNT(txp_max_transbuffer, buf_.buffer_size());
     TXP_ACCOUNT(txp_total_transbuffer, buf_.buffer_size());
 
-    TransItem* it;
+    TransItem *it;
     if (!any_writes_)
         goto after_unlock;
- 
-    if (committed && !STO_SORT_WRITESET) {
-        for (unsigned* idxit = writeset + nwriteset; idxit != writeset; ) {
+
+    if (committed && !STO_SORT_WRITESET)
+    {
+        for (unsigned *idxit = writeset + nwriteset; idxit != writeset;)
+        {
             --idxit;
             if (*idxit < tset_initial_capacity)
                 it = &tset0_[*idxit];
@@ -230,7 +256,8 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
             if (it->needs_unlock())
                 it->owner()->unlock(*it);
         }
-        for (unsigned* idxit = writeset + nwriteset; idxit != writeset; ) {
+        for (unsigned *idxit = writeset + nwriteset; idxit != writeset;)
+        {
             --idxit;
             if (*idxit < tset_initial_capacity)
                 it = &tset0_[*idxit];
@@ -239,20 +266,25 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
             if (it->has_write()) // always true unless a user turns it off in install()/check()
                 it->owner()->cleanup(*it, committed);
         }
-    } else {
+    }
+    else
+    {
         // in participant, we never invoke try_commit,
         // and no good way to set state_ = s_committing_locked; as try_commit do
         // so, we skip it blindly for participant
-        if ((TThread::mode() == 1 && nwriteset>0) || state_ == s_committing_locked) {
+        if ((TThread::mode() == 1 && nwriteset > 0) || state_ == s_committing_locked)
+        {
             it = &tset_[tset_size_ / tset_chunk][tset_size_ % tset_chunk];
-            for (unsigned tidx = tset_size_; tidx != first_write_; --tidx) {
+            for (unsigned tidx = tset_size_; tidx != first_write_; --tidx)
+            {
                 it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
                 if (it->needs_unlock())
                     it->owner()->unlock(*it);
             }
         }
         it = &tset_[tset_size_ / tset_chunk][tset_size_ % tset_chunk];
-        for (unsigned tidx = tset_size_; tidx != first_write_; --tidx) {
+        for (unsigned tidx = tset_size_; tidx != first_write_; --tidx)
+        {
             it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
             if (it->has_write())
                 it->owner()->cleanup(*it, committed);
@@ -261,82 +293,130 @@ void Transaction::stop(bool committed, unsigned* writeset, unsigned nwriteset) {
 
 after_unlock:
     // TODO: this will probably mess up with nested transactions
-    threadinfo_t& thr = tinfo[TThread::id()];
+    threadinfo_t &thr = tinfo[TThread::id()];
     if (thr.trans_end_callback)
         thr.trans_end_callback();
     // XXX should reset trans_end_callback after calling it...
     state_ = s_aborted + committed;
 }
 
-bool Transaction::shard_try_lock_last_writeset() {
+bool Transaction::shard_try_lock_last_writeset()
+{
     assert(TThread::id() == threadid_);
 
     // find the last TransItem
-    TransItem* it = nullptr;
-    if (tset_size_ == 0) return true;
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    TransItem *it = nullptr;
+    if (tset_size_ == 0)
+        return true;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
-        if (it->has_write()) {
-            // For SR transactions, check if the record is reserved by an MR transaction
-            if (!is_mr) {
-                if (it->owner()->is_reserved(*it)) {
-                    // SR transaction cannot acquire lock on a reserved record
+        if (it->has_write())
+        {
+            // For SR transactions, use atomic lock_if_not_reserved to avoid race condition
+            if (!is_mr)
+            {
+                int result = it->owner()->lock_if_not_reserved(*it, *this);
+                if (result == 2)
+                {
+                    // Reserved by MR transaction - SR cannot proceed
+                    return false;
+                }
+                if (result != 0)
+                {
+                    // Lock contention
                     return false;
                 }
             }
-            if (!it->owner()->lock(*it, *this)) {
-                return false;
+            else
+            {
+                // MR transaction - just lock normally
+                if (!it->owner()->lock(*it, *this))
+                {
+                    return false;
+                }
             }
             it->__or_flags(TransItem::lock_bit);
             break;
         }
-        if (tidx == 0) break;
+        if (tidx == 0)
+            break;
     }
     return true;
 }
 
-int Transaction::shard_validate() {
-    //print_stats();
+int Transaction::shard_validate()
+{
+
+    printf("[Transaction::shard_validate] is_mr=%d, tset_size_=%u\n", is_mr, tset_size_);
+    // print_stats();
     assert(TThread::id() == threadid_);
 
-    TransItem* it = nullptr;
-    if (tset_size_ == 0) return 0;
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    if (tset_size_ == 0)
+        return 0;
+        
+    TransItem *it = nullptr;
+    int nwriteset = 0;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
-        if (it->has_read()) {
-            if (!it->owner()->check(*it, *this)
-                && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
+        if (it->has_write())
+        {
+            nwriteset++;
+        }
+        if (tidx == 0)
+            break;
+    }
+    it = nullptr;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
+        auto base = tset_[tidx / tset_chunk];
+        it = base + tidx % tset_chunk;
+        if (it->has_read())
+        {
+            if (!it->owner()->check(*it, *this) && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
+            {
                 return 1;
             }
         }
-        if (tidx == 0) break;
-    }
+        if (tidx == 0)
+            break;
+    } 
     return 0;
 }
 
-void Transaction::shard_serialize_util(uint32_t timestamp) {
-    if (!BenchmarkConfig::getInstance().getIsReplicated()) {return ;}
-    #if defined(SIMPLE_WORKLOAD)
-        int small_batch_num=2;
-    #else
-        int small_batch_num=100;
-    #endif
+void Transaction::shard_serialize_util(uint32_t timestamp)
+{
+    if (!BenchmarkConfig::getInstance().getIsReplicated())
+    {
+        return;
+    }
+#if defined(SIMPLE_WORKLOAD)
+    int small_batch_num = 2;
+#else
+    int small_batch_num = 100;
+#endif
     serialize_util(1 /* anything > 0 */, true, MAX_ARRAY_SIZE_IN_BYTES_SMALL, small_batch_num, timestamp);
 }
 
-uint8_t Transaction::get_current_term() const {
-    if(callback_){
-        if(!current_term_)
+uint8_t Transaction::get_current_term() const
+{
+    if (callback_)
+    {
+        if (!current_term_)
             current_term_ = callback_();
-    }else{
+    }
+    else
+    {
         current_term_ = 0;
     }
     return current_term_;
 }
 
-void Transaction::shard_install(uint32_t timestamp) {
+void Transaction::shard_install(uint32_t timestamp)
+{
     assert(TThread::id() == threadid_);
 
     // Update max timestamp from readset
@@ -345,65 +425,110 @@ void Transaction::shard_install(uint32_t timestamp) {
 
     // Update local_id to catch up with single timestamp
     int delta = tid_unique_ - sync_util::sync_logger::local_replica_id;
-    if (delta > 0) {
+    if (delta > 0)
+    {
         __sync_fetch_and_add(&sync_util::sync_logger::local_replica_id, delta);
     }
 
-    TransItem* it = nullptr;
-    if (tset_size_ == 0) return;
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    TransItem *it = nullptr;
+    if (tset_size_ == 0)
+        return;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
-        if (it->has_write()) {
+        if (it->has_write())
+        {
             it->owner()->install(*it, *this);
         }
-        if (tidx == 0) break;
+        if (tidx == 0)
+            break;
     }
 }
 
-void Transaction::shard_unlock(bool committed) {
+void Transaction::shard_unlock(bool committed)
+{
     assert(TThread::id() == threadid_);
 
-    TransItem* it = nullptr;
-    if (tset_size_ == 0) return;
+    TransItem *it = nullptr;
+    if (tset_size_ == 0)
+        return;
 
     // For MR transactions, unreserve all reserved records in the readset
-    if (is_mr) {
-        for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    if (is_mr)
+    {
+        for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+        {
             auto base = tset_[tidx / tset_chunk];
             it = base + tidx % tset_chunk;
-            if (it->has_read()) {
+            if (it->has_read())
+            {
                 // Use TObject interface to unreserve (similar to how unlock is called)
                 it->owner()->unreserve(*it);
             }
-            if (tidx == 0) break;
+            if (tidx == 0)
+                break;
         }
     }
 
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
-        if (it->needs_unlock()) {
+        if (it->needs_unlock())
+        {
             it->owner()->unlock(*it);
         }
-        if (tidx == 0) break;
+        if (tidx == 0)
+            break;
     }
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
-        if (it->has_write()) {
+        if (it->has_write())
+        {
             it->owner()->cleanup(*it, committed);
         }
-        if (tidx == 0) break;
+        if (tidx == 0)
+            break;
     }
 }
 
-bool Transaction::try_commit(bool no_paxos) {
+void Transaction::shard_unreserve()
+{
+    assert(TThread::id() == threadid_);
+
+    if (tset_size_ == 0)
+        return;
+
+    // Only unreserve if this was an MR transaction
+    if (!is_mr)
+        return;
+
+    printf("[Transaction::shard_unreserve] Unreserving %u items\n", tset_size_);
+
+    TransItem *it = nullptr;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
+        auto base = tset_[tidx / tset_chunk];
+        it = base + tidx % tset_chunk;
+        // Unreserve all items - the unreserve() implementation checks reserved_bit
+        it->owner()->unreserve(*it);
+        if (tidx == 0)
+            break;
+    }
+}
+
+bool Transaction::try_commit(bool no_paxos)
+{
+    printf("[Transaction::try_commit] Called - is_mr=%d, tset_size_=%u, any_writes_=%d\n", is_mr, tset_size_, any_writes_);
     assert(TThread::id() == threadid_);
 #if ASSERT_TX_SIZE
-    if (tset_size_ > TX_SIZE_LIMIT) {
+    if (tset_size_ > TX_SIZE_LIMIT)
+    {
         std::cerr << "transSet_ size at " << tset_size_
-            << ", abort." << std::endl;
+                  << ", abort." << std::endl;
         assert(false);
     }
 #endif
@@ -418,7 +543,14 @@ bool Transaction::try_commit(bool no_paxos) {
         TXP_INCREMENT(txp_commit_time_nonopaque);
 #if !CONSISTENCY_CHECK
     // commit immediately if read-only transaction with opacity
-    if (!any_writes_ && !any_nonopaque_) {
+    if (!any_writes_ && !any_nonopaque_)
+    {
+        // For MR read-only transactions with is_read_only=false, we reserved, so need to unreserve
+        // For MR read-only transactions with is_read_only=true, we did not reserve, so no unreserve needed
+        // if (is_mr && !is_read_only && TThread::readset_shard_bits > 0)
+        // {
+        //     TThread::sclient->remoteUnreserve();
+        // }
         stop(true, nullptr, 0);
         return true;
     }
@@ -432,23 +564,28 @@ bool Transaction::try_commit(bool no_paxos) {
     uint32_t watermarkTimestamp = 0;
     writeset[0] = tset_size_;
 
-    //phase1
-    TransItem* it = nullptr;
+    // phase1
+    TransItem *it = nullptr;
 
     std::vector<int> remote_table_id_batch;
     std::vector<std::string> key_batch;
     std::vector<std::string> value_batch;
 
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         bool isRemote = it->owner()->get_is_remote();
-        if (it->has_write() && isRemote) {
+        if (it->has_write() && isRemote)
+        {
             std::string key = "", val = "";
-            if (hasInsertOp(it)) {  // key_write_value_type
+            if (hasInsertOp(it))
+            { // key_write_value_type
                 key = (*it).write_value<std::string>();
                 versioned_str_struct *vvx = (*it).key<versioned_str_struct *>();
                 val = std::string(vvx->data(), vvx->length());
-            } else {
+            }
+            else
+            {
                 key = it->extra;
                 val = (*it).template write_value<std::string>();
             }
@@ -459,43 +596,65 @@ bool Transaction::try_commit(bool no_paxos) {
     }
 
     int ret = TThread::sclient->remoteBatchLock(remote_table_id_batch, key_batch, value_batch, is_mr);
-    
-    if (ret > 0) {
+
+    if (ret > 0)
+    {
         goto abort;
     }
 
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         bool isRemote = it->owner()->get_is_remote();
-        if (it->has_write()) {
-            // For SR transactions on local writes, check if the record is reserved by an MR transaction
-            if (!isRemote && !is_mr) {
-                if (it->owner()->is_reserved(*it)) {
-                    // SR transaction cannot acquire lock on a reserved record
-                    mark_abort_because(it, "record reserved by MR txn");
-                    goto abort;
-                }
-            }
+        if (it->has_write())
+        {
             writeset[nwriteset++] = tidx;
 #if !STO_SORT_WRITESET
             //   nwriteset >= 1 should make more sense, not == 1
-            if (nwriteset >= 1) {
+            if (nwriteset >= 1)
+            {
                 first_write_ = writeset[0];
                 state_ = s_committing_locked;
             }
-            if (!it->owner()->lock(*it, *this)) {
-                mark_abort_because(it, "commit lock");
-                goto abort;
+            
+            // For SR transactions on local writes, use atomic lock_if_not_reserved
+            if (!isRemote && !is_mr)
+            {
+                printf("[Transaction::try_commit] tidx=%u, atomic lock_if_not_reserved for SR txn\n", tidx);
+                int result = it->owner()->lock_if_not_reserved(*it, *this);
+                if (result == 2)
+                {
+                    // Reserved by MR transaction - SR cannot proceed
+                    mark_abort_because(it, "record reserved by MR txn (atomic check)");
+                    goto abort;
+                }
+                if (result != 0)
+                {
+                    mark_abort_because(it, "commit lock contention");
+                    goto abort;
+                }
+            }
+            else
+            {
+                // MR transaction or remote - just lock normally
+                if (!it->owner()->lock(*it, *this))
+                {
+                    mark_abort_because(it, "commit lock");
+                    goto abort;
+                }
             }
             it->__or_flags(TransItem::lock_bit);
 #endif
         }
-        if (it->has_read()) {
+        if (it->has_read())
+        {
             TXP_INCREMENT(txp_total_r);
         }
-        else if (it->has_predicate()) {
+        else if (it->has_predicate())
+        {
             TXP_INCREMENT(txp_total_check_predicate);
-            if (!it->owner()->check_predicate(*it, *this, true)) {
+            if (!it->owner()->check_predicate(*it, *this, true))
+            {
                 mark_abort_because(it, "commit check_predicate");
                 goto abort;
             }
@@ -505,18 +664,21 @@ bool Transaction::try_commit(bool no_paxos) {
     first_write_ = writeset[0];
 
 #if STO_SORT_WRITESET
-    std::sort(writeset, writeset + nwriteset, [&] (unsigned i, unsigned j) {
+    std::sort(writeset, writeset + nwriteset, [&](unsigned i, unsigned j)
+              {
         TransItem* ti = &tset_[i / tset_chunk][i % tset_chunk];
         TransItem* tj = &tset_[j / tset_chunk][j % tset_chunk];
-        return *ti < *tj;
-    });
+        return *ti < *tj; });
 
-    if (nwriteset) {
+    if (nwriteset)
+    {
         state_ = s_committing_locked;
         auto writeset_end = writeset + nwriteset;
-        for (auto it = writeset; it != writeset_end; ) {
-            TransItem* me = &tset_[*it / tset_chunk][*it % tset_chunk];
-            if (!me->owner()->lock(*me, *this)) {
+        for (auto it = writeset; it != writeset_end;)
+        {
+            TransItem *me = &tset_[*it / tset_chunk][*it % tset_chunk];
+            if (!me->owner()->lock(*me, *this))
+            {
                 mark_abort_because(me, "commit lock");
                 goto abort;
             }
@@ -526,75 +688,88 @@ bool Transaction::try_commit(bool no_paxos) {
     }
 #endif
 
-
 #if CONSISTENCY_CHECK
     fence();
     commit_tid();
     fence();
 #endif
 
-    if (!no_paxos){
+    if (!no_paxos)
+    {
         // Update single timestamp system
         updateSingleTimestamp(); // Updates tid_unique_ internally
         // Merge with max timestamp from read set
-        if (maxTimestampReadSet > tid_unique_) {
+        if (maxTimestampReadSet > tid_unique_)
+        {
             tid_unique_ = maxTimestampReadSet;
         }
 
 #if defined(TRACKING_ROLLBACK)
-        if (get_current_term()==0) {
+        if (get_current_term() == 0)
+        {
             rollbacks_tracker[mako::getCurrentTimeMillis()].push_back(tid_unique_);
         }
 #endif
     }
 
-    //phase2
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    // phase2
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         bool isRemote = it->owner()->get_is_remote();
-        if (!isRemote && it->has_read()) {
+        if (!isRemote && it->has_read())
+        {
             TXP_INCREMENT(txp_total_check_read);
             if (!it->owner()->check(*it, *this) // this is just a version check
-                && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
+                && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
+            {
                 mark_abort_because(it, "commit check");
                 goto abort;
             }
         }
     }
 
-    if (TThread::readset_shard_bits > 0) {
+    if (TThread::readset_shard_bits > 0)
+    {
         // Single timestamp system: pass and receive single watermark
-        int ret=TThread::sclient->remoteValidate(watermarkTimestamp);
+        int ret = TThread::sclient->remoteValidate(watermarkTimestamp);
         uint32_t currentWatermark = sync_util::sync_logger::single_watermark_.load(memory_order_acquire);
-        if(watermarkTimestamp > currentWatermark) {
+        if (watermarkTimestamp > currentWatermark)
+        {
             // Update single watermark
             sync_util::sync_logger::single_watermark_.store(watermarkTimestamp, memory_order_release);
         }
-        if (ret > 0) {
+        if (ret > 0)
+        {
             goto abort;
         }
     }
 
-    //phase3
+    // phase3
 #if STO_SORT_WRITESET
-    for (unsigned tidx = first_write_; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = first_write_; tidx != tset_size_; ++tidx)
+    {
         it = &tset_[tidx / tset_chunk][tidx % tset_chunk];
-        if (it->has_write()) {
+        if (it->has_write())
+        {
             TXP_INCREMENT(txp_total_w);
             it->owner()->install(*it, *this);
         }
     }
 #else
-    if (nwriteset) {
+    if (nwriteset)
+    {
         auto writeset_end = writeset + nwriteset;
 
         // Update local_id to catch up with single timestamp
         int delta = tid_unique_ - sync_util::sync_logger::local_replica_id;
-        if (delta > 0) {
+        if (delta > 0)
+        {
             __sync_fetch_and_add(&sync_util::sync_logger::local_replica_id, delta);
         }
 
-        for (auto idxit = writeset; idxit != writeset_end; ++idxit) {
+        for (auto idxit = writeset; idxit != writeset_end; ++idxit)
+        {
             if (likely(*idxit < tset_initial_capacity))
                 it = &tset0_[*idxit];
             else
@@ -603,21 +778,28 @@ bool Transaction::try_commit(bool no_paxos) {
             // to ensure invalid-bit to be reset in transPut for remote tables on the coordinator shard
             it->owner()->install(*it, *this);
         }
-        if (TThread::writeset_shard_bits > 0||TThread::readset_shard_bits>0) {
+        if (TThread::writeset_shard_bits > 0 || TThread::readset_shard_bits > 0)
+        {
 #if defined(FAIL_NEW_VERSION)
             int retry_c = 0;
-            while (1) {
-                try {
+            while (1)
+            {
+                try
+                {
                     retry_c += 1;
                     TThread::sclient->remoteInstall(tid_unique_);
                     break;
-                } catch (int n) {
-			break;
-                    if (n==1002) { 
+                }
+                catch (int n)
+                {
+                    break;
+                    if (n == 1002)
+                    {
                         // There is a timeout on partial INSTALL, we retry instead of abort for correctness.
                         // Mako can't solve "blocking" issue in 2PC.
-                        //std::cout<<"timeout in remoteInstall; retry attempts: " << retry_c <<std::endl;
-                        if (!TThread::sclient->isBlocking) {
+                        // std::cout<<"timeout in remoteInstall; retry attempts: " << retry_c <<std::endl;
+                        if (!TThread::sclient->isBlocking)
+                        {
                             break;
                         }
                     }
@@ -630,16 +812,18 @@ bool Transaction::try_commit(bool no_paxos) {
     }
 #endif
 
-    if (BenchmarkConfig::getInstance().getIsReplicated()) {
-        if (!no_paxos) {
-            #if defined(SIMPLE_WORKLOAD)
-                int large_batch_num=5;
-            #else
-                int large_batch_num=400;
-            #endif
-        
+    if (BenchmarkConfig::getInstance().getIsReplicated())
+    {
+        if (!no_paxos)
+        {
+#if defined(SIMPLE_WORKLOAD)
+            int large_batch_num = 5;
+#else
+            int large_batch_num = 400;
+#endif
+
             if (TThread::get_is_micro())
-                large_batch_num=3000;
+                large_batch_num = 3000;
             serialize_util(nwriteset, false, MAX_ARRAY_SIZE_IN_BYTES, large_batch_num, tid_unique_);
         }
     }
@@ -653,32 +837,37 @@ bool Transaction::try_commit(bool no_paxos) {
 abort:
     TXP_INCREMENT(txp_commit_time_aborts);
     stop(false, nullptr, 0);
-    if (TThread::writeset_shard_bits > 0 || TThread::readset_shard_bits > 0) {
+    if (TThread::writeset_shard_bits > 0 || TThread::readset_shard_bits > 0)
+    {
         TThread::sclient->remoteAbort();
     }
     return false;
 }
 
 // serialize transactions into log and then sent it out via Paxos
-inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int max_bytes_size, int batch_size, uint32_t timestamp) const {
-    if (nwriteset == 0) return;
+inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int max_bytes_size, int batch_size, uint32_t timestamp) const
+{
+    if (nwriteset == 0)
+        return;
 
     TransItem *it = nullptr;
     size_t w = 0;
     unsigned char *array = NULL;
 
     static thread_local std::shared_ptr<StringAllocator> instance = std::shared_ptr<StringAllocator>(
-            new StringAllocator(TThread::get_nshards(), max_bytes_size, batch_size));
+        new StringAllocator(TThread::get_nshards(), max_bytes_size, batch_size));
     array = instance->getLogOnly(w);
 
-    unsigned short int _count = 0;  // 2bytes, the count of K-V pairs
+    unsigned short int _count = 0;   // 2bytes, the count of K-V pairs
     unsigned short int table_id = 0; // 2 bytes
 
 #if defined(TRACKING_LATENCY)
-    if (timestamp%1000==0&&TThread::getPartitionID()==4){
+    if (timestamp % 1000 == 0 && TThread::getPartitionID() == 4)
+    {
         uint32_t cur_time = mako::getCurrentTimeMillis();
-        if (cur_time - start_time>= 5*1000 && cur_time - start_time <= 15*1000){ // time duration: [5,15]
-            sample_transaction_tracker[timestamp] = mako::getCurrentTimeMillis() ;
+        if (cur_time - start_time >= 5 * 1000 && cur_time - start_time <= 15 * 1000)
+        { // time duration: [5,15]
+            sample_transaction_tracker[timestamp] = mako::getCurrentTimeMillis();
         }
     }
 #endif
@@ -691,7 +880,7 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
     // 1. copy current Commit ID (single timestamp)
     // memcpy(array + w, &instance->latest_commit_timestamp, sizeof(uint32_t));
     memcpy(array + w, &tmp, sizeof(uint32_t));
-    w+= sizeof(uint32_t);
+    w += sizeof(uint32_t);
 
     // 2. copy the count of K-V pairs
     w += sizeof(unsigned short int);
@@ -704,11 +893,13 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
     unsigned short len_of_K = 0;
     unsigned short len_of_V = 0;
 
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         bool isRemote = it->owner()->get_is_remote();
         table_id = 0x0;
-        if (!it->has_write() || isRemote) {
+        if (!it->has_write() || isRemote)
+        {
             continue;
         }
         _count++;
@@ -718,178 +909,208 @@ inline void Transaction::serialize_util(unsigned nwriteset, bool on_remote, int 
         //    check the implementation: MassTrans => trans_write => Sto::new_item(this, val) and add_write
         //    also, due to different implementation purpose, we have to use different ways to retrieve key and value
         std::string kkx = "";
-        if (hasInsertOp(it)) {
+        if (hasInsertOp(it))
+        {
             kkx = (*it).write_value<std::string>();
-        } else {
+        }
+        else
+        {
             kkx = it->extra;
         }
         len_of_K = kkx.length();
-        if (len_of_K == 0) {
+        if (len_of_K == 0)
+        {
             std::cout << "Error while read Key [Slow Exit now]" << std::endl;
-            //exit(1);
+            // exit(1);
         }
 
-        memcpy(array + w, (char *) &len_of_K, sizeof(unsigned short));
+        memcpy(array + w, (char *)&len_of_K, sizeof(unsigned short));
         w += sizeof(unsigned short);
 
-        memcpy(array + w, (char *) kkx.data(), len_of_K);
+        memcpy(array + w, (char *)kkx.data(), len_of_K);
         w += len_of_K;
 
         // 5. copy the length of value and content of value
-        if (hasInsertOp(it)) {
+        if (hasInsertOp(it))
+        {
             versioned_str_struct *vvx = (*it).key<versioned_str_struct *>();
             assert(vvx->length() > mako::EXTRA_BITS_FOR_VALUE);
             len_of_V = vvx->length() - mako::EXTRA_BITS_FOR_VALUE;
-            memcpy(array + w, (char *) &len_of_V, sizeof(unsigned short));
+            memcpy(array + w, (char *)&len_of_V, sizeof(unsigned short));
             w += sizeof(unsigned short);
 
-            memcpy(array + w, (char *) vvx->data(), len_of_V);
+            memcpy(array + w, (char *)vvx->data(), len_of_V);
             w += len_of_V;
-        } else {
+        }
+        else
+        {
             std::string vvx = "";
-            if (hasDeleteOp(it)){
+            if (hasDeleteOp(it))
+            {
                 vvx = "B"; // no one cares the content for a deleted item
                 len_of_V = 1;
-            }else{
+            }
+            else
+            {
                 vvx = (*it).template write_value<std::string>();
                 assert(vvx.length() > mako::EXTRA_BITS_FOR_VALUE);
                 len_of_V = vvx.length() - mako::EXTRA_BITS_FOR_VALUE;
             }
-            memcpy(array + w, (char *) &len_of_V, sizeof(unsigned short));
+            memcpy(array + w, (char *)&len_of_V, sizeof(unsigned short));
             w += sizeof(unsigned short);
 
-            memcpy(array + w, (char *) vvx.data(), len_of_V);
+            memcpy(array + w, (char *)vvx.data(), len_of_V);
             w += len_of_V;
         }
 
         // 6. copy table id
         table_id = it->owner()->get_table_id();
-        if (hasDeleteOp(it)) {  // delete flag
+        if (hasDeleteOp(it))
+        {                                    // delete flag
             table_id = table_id | (1 << 15); // 1 << ((sizeof(unsigned short)*8)-1) = 1 << 15
         }
-        if (table_id == 0) {
+        if (table_id == 0)
+        {
             Warning("table_id can't be a zero here");
         }
-        memcpy(array + w, (char *) &table_id, sizeof(unsigned short));
+        memcpy(array + w, (char *)&table_id, sizeof(unsigned short));
         w += sizeof(unsigned short);
     }
-    memcpy(array + w_tmp_c - sizeof(unsigned short int), (char *) &_count, sizeof(unsigned short int));
+    memcpy(array + w_tmp_c - sizeof(unsigned short int), (char *)&_count, sizeof(unsigned short int));
     unsigned int len_of_KV = w - w_tmp;
-    memcpy(array + w_tmp - sizeof(unsigned int), (char *) &len_of_KV, sizeof(unsigned int));
+    memcpy(array + w_tmp - sizeof(unsigned int), (char *)&len_of_KV, sizeof(unsigned int));
 
     instance->update_ptr(w);
     size_t pos = 0;
-    unsigned char *queueLog = instance->getLogOnly (pos);
-    if(instance->checkPushRequired()) {
-      assert(pos <= MAX_ARRAY_SIZE_IN_BYTES) ;
-      if(pos!=0) {
-          // 7. latest_commit_id: single timestamp*10+term
-          memcpy (queueLog + pos, &instance->latest_commit_timestamp, sizeof(uint32_t));
-          pos += sizeof(uint32_t);
-          
-          // 8. tracking purpose, the latency to commit a huge log
-          uint32_t st_time = mako::getCurrentTimeMillis();
-          memcpy (queueLog + pos, &st_time, sizeof(uint32_t));
-          pos += sizeof(uint32_t);
+    unsigned char *queueLog = instance->getLogOnly(pos);
+    if (instance->checkPushRequired())
+    {
+        assert(pos <= MAX_ARRAY_SIZE_IN_BYTES);
+        if (pos != 0)
+        {
+            // 7. latest_commit_id: single timestamp*10+term
+            memcpy(queueLog + pos, &instance->latest_commit_timestamp, sizeof(uint32_t));
+            pos += sizeof(uint32_t);
 
-          instance->update_ptr(pos);
+            // 8. tracking purpose, the latency to commit a huge log
+            uint32_t st_time = mako::getCurrentTimeMillis();
+            memcpy(queueLog + pos, &st_time, sizeof(uint32_t));
+            pos += sizeof(uint32_t);
 
-          /*
-          int outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
-          if (outstanding>20){
-           usleep(10*1000); // wait 1 Paxos log time 
-          }
-           
-          while ((TThread::sclient == NULL) || !TThread::sclient->stopped) {
-            if (outstanding>20) {
-                usleep(50);
-            } else {
-                break;
+            instance->update_ptr(pos);
+
+            /*
+            int outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
+            if (outstanding>20){
+             usleep(10*1000); // wait 1 Paxos log time
             }
-            outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
-          }
-          Warning("outstanding request: %d, par_id: %d", outstanding, TThread::getPartitionID ());
-          
-          // deal with logs from its corresponding threads
-          if (TThread::in_loading_phase){
-            Warning("add a log to nc, par_id:%d,", TThread::getPartitionID());
-            usleep(10*1000);
-          }*/
 
-        // FIX me: merge the logs from helper threads instead of a separate log
-        add_log_to_nc((char *)queueLog, pos, TThread::getPartitionID (), batch_size); // the partitionID for the helper thread
+            while ((TThread::sclient == NULL) || !TThread::sclient->stopped) {
+              if (outstanding>20) {
+                  usleep(50);
+              } else {
+                  break;
+              }
+              outstanding = get_outstanding_logs(TThread::getPartitionID ()) ;
+            }
+            Warning("outstanding request: %d, par_id: %d", outstanding, TThread::getPartitionID ());
+
+            // deal with logs from its corresponding threads
+            if (TThread::in_loading_phase){
+              Warning("add a log to nc, par_id:%d,", TThread::getPartitionID());
+              usleep(10*1000);
+            }*/
+
+            // FIX me: merge the logs from helper threads instead of a separate log
+            add_log_to_nc((char *)queueLog, pos, TThread::getPartitionID(), batch_size); // the partitionID for the helper thread
 
 #ifndef DISABLE_DISK
-        // Asynchronously persist to RocksDB
-        auto& persistence = mako::RocksDBPersistence::getInstance();
-        uint32_t shard_id = BenchmarkConfig::getInstance().getShardIndex();
+            // Asynchronously persist to RocksDB
+            auto &persistence = mako::RocksDBPersistence::getInstance();
+            uint32_t shard_id = BenchmarkConfig::getInstance().getShardIndex();
 
-        // Per-partition success/failure counters (max 64 partitions)
-        static std::array<std::atomic<uint64_t>, 64> per_partition_success{};
-        static std::array<std::atomic<uint64_t>, 64> per_partition_fail{};
+            // Per-partition success/failure counters (max 64 partitions)
+            static std::array<std::atomic<uint64_t>, 64> per_partition_success{};
+            static std::array<std::atomic<uint64_t>, 64> per_partition_fail{};
 
-        // Capture the timestamp and partition ID for the callback
-        uint32_t persist_timestamp = instance->latest_commit_timestamp;
-        int partition_id = TThread::getPartitionID();
+            // Capture the timestamp and partition ID for the callback
+            uint32_t persist_timestamp = instance->latest_commit_timestamp;
+            int partition_id = TThread::getPartitionID();
 
-        persistence.persistAsync((const char*)queueLog, pos, shard_id, partition_id,
-            [persist_timestamp, partition_id](bool success) {
-                if (success) {
-                    // Update disk persistence timestamp for this partition
-                    sync_util::sync_logger::updateDiskTimestamp(partition_id, persist_timestamp);
+            persistence.persistAsync((const char *)queueLog, pos, shard_id, partition_id,
+                                     [persist_timestamp, partition_id](bool success)
+                                     {
+                                         if (success)
+                                         {
+                                             // Update disk persistence timestamp for this partition
+                                             sync_util::sync_logger::updateDiskTimestamp(partition_id, persist_timestamp);
 
-                    uint64_t count = per_partition_success[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
-                    // Log every successful persist
-                    if (count % 100 == 0) {
-                        std::cout << "[RocksDB Helper] par_id=" << partition_id
-                                      << ", success=" << count
-                                      << ", failed=" << per_partition_fail[partition_id].load()
-                                      << std::endl;
-                    }
-                } else {
-                    uint64_t fail_count = per_partition_fail[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
-                    std::cerr << "[RocksDB Helper] Persist FAILED: par_id=" << partition_id
-                              << ", total_failures=" << fail_count << std::endl;
-                }
-            });
+                                             uint64_t count = per_partition_success[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
+                                             // Log every successful persist
+                                             if (count % 100 == 0)
+                                             {
+                                                 std::cout << "[RocksDB Helper] par_id=" << partition_id
+                                                           << ", success=" << count
+                                                           << ", failed=" << per_partition_fail[partition_id].load()
+                                                           << std::endl;
+                                             }
+                                         }
+                                         else
+                                         {
+                                             uint64_t fail_count = per_partition_fail[partition_id].fetch_add(1, std::memory_order_relaxed) + 1;
+                                             std::cerr << "[RocksDB Helper] Persist FAILED: par_id=" << partition_id
+                                                       << ", total_failures=" << fail_count << std::endl;
+                                         }
+                                     });
 #endif
-      }
-      instance->resetMemory();
+        }
+        instance->resetMemory();
     }
 }
 
-void Transaction::print_stats() {
-    if (tset_size_ == 0) return;
-    TransItem* it = nullptr;
-    if (tset_size_ == 0) return;
-    for (unsigned tidx = tset_size_-1; tidx >= 0; --tidx) {
+void Transaction::print_stats()
+{
+    if (tset_size_ == 0)
+        return;
+    TransItem *it = nullptr;
+    if (tset_size_ == 0)
+        return;
+    for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
+    {
         auto base = tset_[tidx / tset_chunk];
         it = base + tidx % tset_chunk;
         versioned_str_struct *value = (*it).key<versioned_str_struct *>();
         std::string val = std::string(value->data(), value->length());
         std::string key = "";
-        if (hasInsertOp(it)) {  // key_write_value_type
+        if (hasInsertOp(it))
+        { // key_write_value_type
             key = (*it).write_value<std::string>();
-        } else {
+        }
+        else
+        {
             key = it->extra;
         }
         Warning("print[obj:%p], has_write: %d, has_read: %d, has_lock: %d, has_insert: %d, has_delete: %d, invalidate: %d, key: %s, value: %s", it, it->has_write(), it->has_read(), it->needs_unlock(), hasInsertOp(it), hasDeleteOp(it), it->has_flag(TransactionTid::user_bit), key.c_str(), val.c_str());
-        if (tidx == 0) break;
+        if (tidx == 0)
+            break;
     }
 }
 
-const char* Transaction::state_name(int state) {
-    static const char* names[] = {"in-progress", "opacity-check", "committing", "committing-locked", "aborted", "committed"};
+const char *Transaction::state_name(int state)
+{
+    static const char *names[] = {"in-progress", "opacity-check", "committing", "committing-locked", "aborted", "committed"};
     if (unsigned(state) < arraysize(names))
         return names[state];
     else
         return "unknown-state";
 }
 
-void Transaction::print(std::ostream& w) const {
-    w << "T0x" << (void*) this << " " << state_name(state_) << " [";
-    const TransItem* it = nullptr;
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+void Transaction::print(std::ostream &w) const
+{
+    w << "T0x" << (void *)this << " " << state_name(state_) << " [";
+    const TransItem *it = nullptr;
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
+    {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (tidx)
             w << " ";
@@ -898,42 +1119,49 @@ void Transaction::print(std::ostream& w) const {
     w << "]\n";
 }
 
-void Transaction::print() const {
+void Transaction::print() const
+{
     print(std::cerr);
 }
 
-void TObject::print(std::ostream& w, const TransItem& item) const {
-    w << "{" << typeid(*this).name() << " " << (void*) this << "." << item.key<void*>();
+void TObject::print(std::ostream &w, const TransItem &item) const
+{
+    w << "{" << typeid(*this).name() << " " << (void *)this << "." << item.key<void *>();
     if (item.has_read())
-        w << " R" << item.read_value<void*>();
+        w << " R" << item.read_value<void *>();
     if (item.has_write())
-        w << " =" << item.write_value<void*>();
+        w << " =" << item.write_value<void *>();
     if (item.has_predicate())
-        w << " P" << item.predicate_value<void*>();
+        w << " P" << item.predicate_value<void *>();
     w << "}";
 }
 
-unsigned long long int TObject::get_table_id() const {
+unsigned long long int TObject::get_table_id() const
+{
     unsigned long long int temp = 10012;
     return temp;
 }
 
-bool TObject::get_is_remote() const {
+bool TObject::get_is_remote() const
+{
     exit(1);
     return false;
 }
 
-std::ostream& operator<<(std::ostream& w, const Transaction& txn) {
+std::ostream &operator<<(std::ostream &w, const Transaction &txn)
+{
     txn.print(w);
     return w;
 }
 
-std::ostream& operator<<(std::ostream& w, const TestTransaction& txn) {
+std::ostream &operator<<(std::ostream &w, const TestTransaction &txn)
+{
     txn.print(w);
     return w;
 }
 
-std::ostream& operator<<(std::ostream& w, const TransactionGuard& txn) {
+std::ostream &operator<<(std::ostream &w, const TransactionGuard &txn)
+{
     txn.print(w);
     return w;
 }

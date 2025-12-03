@@ -238,13 +238,10 @@ namespace mako
         transport->Statistics();
     }
     // simple get function
-    int ShardClient::remoteGet(int remote_table_id, std::string key, std::string &value, bool is_mr)
+    int ShardClient::remoteGet(int remote_table_id, std::string key, std::string &value, bool is_mr, bool is_read_only)
     {
-        printf("[ShardClient::remoteGet] Called - table_id: %d, is_mr: %d\n", remote_table_id, is_mr);
-
         int table_id = remote_table_id;
         int dstShardIndex = (remote_table_id - 1) / mako::NUM_TABLES_PER_SHARD;
-        printf("[ShardClient::remoteGet] dstShardIndex: %d\n", dstShardIndex);
 
         TThread::readset_shard_bits |= (1 << dstShardIndex);
 
@@ -283,22 +280,20 @@ namespace mako
         const int timeout = promise.GetTimeout();
         uint16_t server_id = shardIndex * config.warehouses + par_id;
 
-        printf("[ShardClient::remoteGet] Calling client->InvokeGet() with is_mr: %d\n", is_mr);
         client->InvokeGet(++tid,         // txn_nr
                           dstShardIndex, // shardIdx
                           server_id,
                           key,
                           table_id,
                           is_mr,
+                          is_read_only,
                           bind(&ShardClient::GetCallback, this,
                                placeholders::_1),
                           bind(&ShardClient::GiveUpTimeout, this),
                           timeout);
-        printf("[ShardClient::remoteGet] InvokeGet completed, waiting for response\n");
         // Warning("remoteGET: key:%s,table_id:%d,key_len:%d",mako::printStringAsBit(key).c_str(),table_id,key.length());
         value = promise.GetValue();
         int ret = promise.GetReply();
-        printf("[ShardClient::remoteGet] Got response, ret: %d, value_len: %zu\n", ret, value.length());
         if (ret > 0)
         {
             TThread::trans_nosend_abort |= (1 << dstShardIndex);
@@ -583,6 +578,24 @@ namespace mako
                             bind(&ShardClient::SendToAllStatusCallBack, this, placeholders::_1),
                             bind(&ShardClient::SendToAllGiveUpTimeout, this),
                             ABORT_TIMEOUT);
+        return is_all_response_ok();
+    }
+
+    int ShardClient::remoteUnreserve()
+    {
+        // Only send to shards that were read from (where reservations were made)
+        int shards_to_send_bits = TThread::readset_shard_bits;
+        if (!shards_to_send_bits)
+            return ErrorCode::SUCCESS;
+        calculate_num_response_waiting(shards_to_send_bits);
+        uint16_t server_id = shardIndex * config.warehouses + par_id;
+
+        client->InvokeUnreserve(++tid, // txn_nr
+                            shards_to_send_bits,
+                            server_id,
+                            bind(&ShardClient::SendToAllStatusCallBack, this, placeholders::_1),
+                            bind(&ShardClient::SendToAllGiveUpTimeout, this),
+                            BASIC_TIMEOUT);
         return is_all_response_ok();
     }
 }

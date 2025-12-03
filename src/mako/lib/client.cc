@@ -68,6 +68,9 @@ namespace mako
         case abortReqType:
             HandleAbortReply(respBuf);
             break;
+        case unreserveReqType:
+            HandleUnreserveReply(respBuf);
+            break;
         case batchLockReqType:
             HandleBatchLockReply(respBuf);
             break;
@@ -522,6 +525,7 @@ namespace mako
                            const string &key,
                            uint16_t table_id,
                            bool is_mr,
+                           bool is_read_only,
                            resp_continuation_t continuation,
                            error_continuation_t error_continuation,
                            uint32_t timeout)
@@ -529,8 +533,8 @@ namespace mako
         uint32_t reqId = ++lastReqId;
         reqId *= 10;
 
-        printf("[Client::InvokeGet] Called - txn_nr: %lu, dstShardIdx: %d, table_id: %d, is_mr: %d\n",
-               txn_nr, dstShardIdx, table_id, is_mr);
+        printf("[Client::InvokeGet] Called - txn_nr: %lu, dstShardIdx: %d, table_id: %d, is_mr: %d, is_read_only: %d\n",
+               txn_nr, dstShardIdx, table_id, is_mr, is_read_only);
         //Warning("invoke InvokeGet,txn_nr:%d,par_id:%d,id:%d",txn_nr,TThread::getPartitionID(),TThread::id());
         Debug("invoke InvokeGet\n");
         crtReqK =
@@ -553,8 +557,9 @@ namespace mako
         reqBuf->req_nr = reqId + current_term;
         reqBuf->len = key.size();
         reqBuf->is_mr = is_mr ? 1 : 0;
-        printf("[Client::InvokeGet] Request buffer set - req_nr: %u, is_mr in packet: %d\n", 
-               reqBuf->req_nr, reqBuf->is_mr);
+        reqBuf->is_read_only = is_read_only ? 1 : 0;
+        printf("[Client::InvokeGet] Request buffer set - req_nr: %u, is_mr in packet: %d, is_read_only in packet: %d\n", 
+               reqBuf->req_nr, reqBuf->is_mr, reqBuf->is_read_only);
         ASSERT_LT(key.size(), max_key_length);
 
         memcpy(reqBuf->key, key.c_str(), key.size());
@@ -608,6 +613,44 @@ namespace mako
             // for abort itself, we do nothing
         }
 
+    }
+
+    void Client::InvokeUnreserve(uint64_t txn_nr,
+                             int dstShardIdx,
+                             uint16_t server_id,
+                             basic_continuation_t continuation,
+                             error_continuation_t error_continuation,
+                             uint32_t timeout)
+    {
+        Debug("invoke InvokeUnreserve\n");
+        uint32_t reqId = ++lastReqId;
+        reqId *= 10;
+
+        crtReqK =
+            PendingRequestK("InvokeUnreserve",
+                            reqId,
+                            txn_nr,
+                            server_id,
+                            continuation,
+                            error_continuation);
+
+        auto *reqBuf = reinterpret_cast<basic_request_t *>(
+            transport->GetRequestBuf(
+                sizeof(basic_request_t),
+                sizeof(basic_response_t)));
+        reqBuf->targert_server_id = server_id;
+        reqBuf->req_nr = reqId + current_term;
+        blocked = true;
+        try {
+            transport->SendRequestToAll(this,
+                                        unreserveReqType,
+                                        dstShardIdx,
+                                        config.warehouses+5+server_id%TThread::get_num_erpc_server(),
+                                        sizeof(basic_response_t),
+                                        sizeof(basic_request_t));
+        } catch(int n) {
+            // for unreserve itself, we do nothing on error
+        }
     }
 
     void Client::HandleGetReply(char *respBuf)
@@ -855,6 +898,25 @@ namespace mako
         if (resp->req_nr != crtReqK.req_nr)
         {
             //Warning("Received abort reply when no request was pending; req_nr = %lu, crtReqK:%lu", resp->req_nr, crtReqK.req_nr);
+            return;
+        }
+
+        // invoke application callback
+        crtReqK.resp_continuation(respBuf);
+        // remove from pending list
+        if (num_response_waiting) num_response_waiting --;
+        if (num_response_waiting == 0) {
+            blocked = false;
+            crtReqK.req_nr = 0;
+        }
+    }
+
+    void Client::HandleUnreserveReply(char *respBuf)
+    {
+        auto *resp = reinterpret_cast<basic_response_t *>(respBuf);
+        Debug("eRPC client receives unreserve reply, req_nr: %d, crt: %d\n", resp->req_nr, crtReqK.req_nr);
+        if (resp->req_nr != crtReqK.req_nr)
+        {
             return;
         }
 

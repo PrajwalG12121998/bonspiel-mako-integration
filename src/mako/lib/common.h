@@ -176,6 +176,8 @@ namespace mako
     const uint8_t controlReqType = 12;
     // reserved for watermark exchange between follower data center
     const uint8_t watermarkReqType = 13;
+    // unreserve request for MR read-only transactions
+    const uint8_t unreserveReqType = 14;
     
 
     const size_t max_key_length = 64;
@@ -218,6 +220,7 @@ namespace mako
         uint16_t table_id;
         uint16_t len;
         uint8_t is_mr;  // 1 if multi-region transaction, 0 otherwise
+        uint8_t is_read_only;  // 1 if read-only transaction, 0 otherwise
         char key[max_key_length];
     };
 

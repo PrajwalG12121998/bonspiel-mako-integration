@@ -47,6 +47,7 @@ namespace mako
         void HandleGetTimestampRequest(char *reqBuf, char *respBuf, size_t &respLen);
         void HandleSerializeUtilRequest(char *reqBuf, char *respBuf, size_t &respLen);
         void HandleAbortRequest(char *reqBuf, char *respBuf, size_t &respLen);
+        void HandleUnreserveRequest(char *reqBuf, char *respBuf, size_t &respLen);
         void HandleInstallRequest(char *reqBuf, char *respBuf, size_t &respLen);
         void HandleUnLockRequest(char *reqBuf, char *respBuf, size_t &respLen);
 

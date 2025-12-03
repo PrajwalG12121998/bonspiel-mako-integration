@@ -33,6 +33,7 @@ namespace mako
                             const string &key,
                             uint16_t table_id,
                             bool is_mr,
+                            bool is_read_only,
                             resp_continuation_t continuation,
                             error_continuation_t error_continuation,
                             uint32_t timeout);
@@ -94,6 +95,13 @@ namespace mako
                             error_continuation_t error_continuation,
                             uint32_t timeout);
 
+        void InvokeUnreserve(uint64_t txn_nr,
+                            int dstShardIdx,
+                            uint16_t server_id,
+                            basic_continuation_t continuation,
+                            error_continuation_t error_continuation,
+                            uint32_t timeout);
+
         void InvokeGetTimestamp(uint64_t txn_nr,
                             int dstShardIdx,
                             uint16_t server_id,
@@ -145,6 +153,7 @@ namespace mako
         void HandleInstallReply(char *respBuf);
         void HandleUnLockReply(char *respBuf);
         void HandleAbortReply(char *respBuf);
+        void HandleUnreserveReply(char *respBuf);
         void HandleGetTimestamp(char *respBuf);
         void HandleWatermarkReply(char *respBuf);
         void HandleWarmupReply(char *respBuf);

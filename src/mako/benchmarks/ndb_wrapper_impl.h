@@ -167,7 +167,9 @@ ndb_wrapper<Transaction>::new_txn(
     uint64_t txn_flags,
     str_arena &arena,
     void *buf,
-    TxnProfileHint hint)
+    TxnProfileHint hint,
+    bool is_mr,
+    bool is_read_only)
 {
   ndbtxn * const p = reinterpret_cast<ndbtxn *>(buf);
   p->hint = hint;

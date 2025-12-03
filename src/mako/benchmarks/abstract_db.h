@@ -103,7 +103,7 @@ public:
       uint64_t txn_flags,
       str_arena &arena,
       void *buf,
-      TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false) = 0;
+      TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false, bool is_read_only = false) = 0;
 
   typedef std::map<std::string, uint64_t> counter_map;
   typedef std::map<std::string, counter_map> txn_counter_map;
@@ -172,6 +172,7 @@ public:
   virtual void shard_install(uint32_t timestamp) = 0;
   virtual void shard_serialize_util(uint32_t timestamp)  = 0;
   virtual void shard_unlock(bool committed) = 0;
+  virtual void shard_unreserve() = 0;
   virtual void shard_reset() = 0;
 };
 

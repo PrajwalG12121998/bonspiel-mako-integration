@@ -88,6 +88,9 @@ namespace mako
         case abortReqType:
             HandleAbortRequest(reqBuf, respBuf, respLen);
             break;
+        case unreserveReqType:
+            HandleUnreserveRequest(reqBuf, respBuf, respLen);
+            break;
         case batchLockReqType:
             HandleBatchLockRequest(reqBuf, respBuf, respLen);
             break;
@@ -110,6 +113,23 @@ namespace mako
         resp->req_nr = req->req_nr;
         db->shard_reset();
 
+    }
+
+    void ShardReceiver::HandleUnreserveRequest(char *reqBuf, char *respBuf, size_t &respLen)
+    {
+        
+        int status = ErrorCode::SUCCESS;
+        auto *req = reinterpret_cast<basic_request_t *>(reqBuf);
+        
+        // Unreserve all reserved records for MR read-only transactions
+        // This is called when MR transaction commits without any writes on this shard
+        db->shard_unreserve();
+
+        auto *resp = reinterpret_cast<basic_response_t *>(respBuf);
+        respLen = sizeof(basic_response_t);
+        resp->status = (current_term > req->req_nr % 10)? ErrorCode::ABORT: status;
+        resp->req_nr = req->req_nr;
+        db->shard_reset();
     }
 
     void ShardReceiver::HandleUnLockRequest(char *reqBuf, char *respBuf, size_t &respLen)
@@ -160,6 +180,7 @@ namespace mako
         int status = ErrorCode::SUCCESS;
         auto *req = reinterpret_cast<basic_request_t *>(reqBuf);
         try {
+            printf("[ShardReceiver::HandleValidateRequest] req_nr=%u\n", req->req_nr);
             status = db->shard_validate();
             if (status>0){
                 //db->shard_abort_txn(nullptr); // early reject, unlock the key earlier
@@ -296,8 +317,8 @@ namespace mako
         if (TThread::txn) {
             TThread::txn->is_mr = req->is_mr;
         }
-        printf("[Server::HandleBatchLockRequest] Received request - is_mr: %d, batch_size: %d, TThread::txn->is_mr: %d\n",
-               (int)req->is_mr, (int)req->batch_size, TThread::txn ? TThread::txn->is_mr : -1);
+        printf("[Server::HandleBatchLockRequest] req->is_mr=%d, TThread::txn->is_mr=%d\n", 
+               (int)req->is_mr, TThread::txn ? TThread::txn->is_mr : -1);
 
         uint16_t table_id, klen, vlen;
         char *k_ptr, *v_ptr;
@@ -524,12 +545,13 @@ namespace mako
                 status = ErrorCode::ABORT;
             } else {
                 try {
-                    // Set is_mr on the server-side transaction from the request
+                    // Set is_mr and is_read_only on the server-side transaction from the request
                     if (TThread::txn) {
                         TThread::txn->is_mr = req->is_mr;
+                        TThread::txn->is_read_only = req->is_read_only;
                     }
-                    printf("[Server::HandleGetRequest] Received request - is_mr: %d, table_id: %d, TThread::txn->is_mr: %d\n", 
-                           (int)req->is_mr, req->table_id, TThread::txn ? TThread::txn->is_mr : -1);
+                    printf("[Server::HandleGetRequest] req->is_mr=%d, req->is_read_only=%d, TThread::txn->is_mr=%d, table_id=%d\n", 
+                           (int)req->is_mr, (int)req->is_read_only, TThread::txn ? TThread::txn->is_mr : -1, req->table_id);
                     bool ret = it->second->shard_get(obj_key0, obj_v);
                     // abort here,
                     //  "not found a key" maybe a expected behavior

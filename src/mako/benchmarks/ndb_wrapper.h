@@ -92,7 +92,9 @@ public:
       uint64_t txn_flags,
       str_arena &arena,
       void *buf,
-      TxnProfileHint hint);
+      TxnProfileHint hint,
+      bool is_mr = false,
+      bool is_read_only = false);
   virtual bool commit_txn(void *txn);
   virtual void abort_txn(void *txn);
   virtual void abort_txn_local(void *txn);

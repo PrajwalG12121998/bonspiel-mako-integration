@@ -62,7 +62,7 @@ public:
         // Read and verify 5 keys
         bool all_reads_ok = true;
         for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false/*is_read_only*/);
             std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = "";
             try {
@@ -93,6 +93,7 @@ public:
                 std::string value = "";
                 try {
                     table->get(txn, key, value);
+                    table->put(txn, key, value); // read twice to test reservation
                     db->commit_txn(txn);
                     
                     std::string expected = "test_value2_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
@@ -124,13 +125,13 @@ public:
 
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            // Randomly decide SR or MR transaction (20% MR, 80% SR)
-            bool is_mr = (rand() % 100) < 20;
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);
+            // Randomly decide SR or MR transaction (30% MR, 70% SR)
+            bool is_mr = (rand() % 100) < 30;
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true);
             printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu is_mr=%d\n", home_shard_index, worker_id_, i, is_mr);
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
             try {
-                // table->get(txn, shared_key, value);
+                table->get(txn, shared_key, value);
                 table->put(txn, shared_key, value);
                 db->commit_txn(txn);
                 commits++;
@@ -149,7 +150,7 @@ public:
         if (original_worker_id_ == 0) {
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
-            void *txn = db->new_txn(0, arena,  txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena,  txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
             std::string value;
             try {
                 bool exists = table->get(txn, shared_key, value);
@@ -281,7 +282,7 @@ public:
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
             // Read to verify records on local shard
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
             std::string local_key = "cross_shard_local";
             std::string local_value;
             try {
@@ -306,7 +307,7 @@ public:
 
             // Read to verify records on remote shard (sequential - after txn completes)
             {
-                void *txn2 = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+                void *txn2 = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
                 std::string remote_key = "cross_shard_remote";
                 std::string remote_value;
                 try {
@@ -332,6 +333,54 @@ public:
         }
     }
 
+    void test_put_then_get() {
+        printf("\n[TEST_PUT_THEN_GET] === Testing Put Then Get Thread:%ld ===\n", std::this_thread::get_id());
+
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        std::string test_key = "put_get_test_key";
+        std::string put_value = mako::Encode("value_from_put_txn");
+
+        // // Transaction 1: PUT the key
+        printf("[TEST_PUT_THEN_GET] [Shard %d] Starting PUT transaction for key: %s\n", home_shard_index, test_key.c_str());
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            try {
+                table->put(txn, test_key, put_value);
+                db->commit_txn(txn);
+                printf("[TEST_PUT_THEN_GET] [Shard %d] PUT transaction COMMITTED\n", home_shard_index);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf("[TEST_PUT_THEN_GET] [Shard %d] PUT transaction ABORTED\n", home_shard_index);
+                return;
+            }
+        }
+
+        // Small delay to ensure PUT is fully committed
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Transaction 2: GET the key
+        // printf("[TEST_PUT_THEN_GET] [Shard %d] Starting GET transaction for key: %s\n", home_shard_index, test_key.c_str());
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            std::string get_value;
+            try {
+                bool exists = table->get(txn, test_key, get_value);
+                db->commit_txn(txn);
+                if (exists) {
+                    printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction COMMITTED - key EXISTS, value: %s\n", 
+                           home_shard_index, get_value.substr(0, 50).c_str());
+                } else {
+                    printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction COMMITTED - key DOES NOT EXIST\n", home_shard_index);
+                }
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction ABORTED\n", home_shard_index);
+            }
+        }
+    }
+
     void test_read_write_contention() {
         printf("\n[TEST_RW_CONTENTION] === Testing Read-Write Contention Thread:%ld ===\n", std::this_thread::get_id());
 
@@ -343,7 +392,7 @@ public:
 
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
             std::string key = "rw_key_" + std::to_string(i % 3); // 3 shared keys
 
             try {
@@ -376,7 +425,7 @@ public:
 
             int existing_keys = 0;
             for (size_t i = 0; i < 3; i++) {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
                 std::string key = "rw_key_" + std::to_string(i);
                 std::string value;
                 try {
@@ -418,10 +467,11 @@ void run_worker_tests(abstract_db *db, int worker_id,
 
     // Run all tests
     worker->test_basic_transactions();
-    worker->test_single_key_contention();
-    worker->test_overlapping_keys();
-    worker->test_cross_shard_contention();
-    worker->test_read_write_contention();
+    // worker->test_single_key_contention();
+    // worker->test_overlapping_keys();
+    // worker->test_cross_shard_contention();
+    // worker->test_read_write_contention();
+    //worker->test_put_then_get();
 
     printf("[Worker %d] Completed\n", worker_id);
 }

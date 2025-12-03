@@ -105,13 +105,8 @@ public:
       });
     } else {
       bool is_mr = TThread::txn ? TThread::txn->is_mr : false;
-      printf("TEST---------------------------------------------");
-      printf("[mbta_wrapper::get] TThread::txn: %p\n", TThread::txn);
-      printf("TEST---------------------------------------------");
-      printf("[mbta_wrapper::get] REMOTE path - is_mr: %d, table_id: %llu\n", is_mr, mbta.get_table_id());
-      printf("[mbta_wrapper::get] Calling shardClient->remoteGet()\n");
-      int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value, is_mr);
-      printf("[mbta_wrapper::get] remoteGet returned: %d\n", ret);
+      bool is_read_only = TThread::txn ? TThread::txn->is_read_only : false;
+      int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value, is_mr, is_read_only);
       if (ret>0) {
         throw abstract_db::abstract_abort_exception();
       }
@@ -1072,8 +1067,8 @@ public:
                 uint64_t txn_flags,
                 str_arena &arena,
                 void *buf,
-                TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false) {
-    Sto::start_transaction(is_mr);
+                TxnProfileHint hint = HINT_DEFAULT, bool is_mr = false, bool is_read_only = false) {
+    Sto::start_transaction(is_mr, is_read_only);
     thr_arena = &arena;
     return NULL;
   }
@@ -1099,12 +1094,14 @@ public:
   }
 
   void abort_txn(void *txn) {
+    printf("[mbta_wrapper::abort_txn] Called\n");
     Sto::silent_abort();
     if (TThread::writeset_shard_bits>0||TThread::readset_shard_bits>0)
       TThread::sclient->remoteAbort();
   }
 
   void abort_txn_local(void *txn) {
+    printf("[mbta_wrapper::abort_txn_local] Called\n");
     Sto::silent_abort();
   }
 
@@ -1126,6 +1123,10 @@ public:
 
   void shard_unlock(bool committed) {
     Sto::shard_unlock(committed);
+  }
+
+  void shard_unreserve() {
+    Sto::shard_unreserve();
   }
 
   void shard_abort_txn(void *txn) {

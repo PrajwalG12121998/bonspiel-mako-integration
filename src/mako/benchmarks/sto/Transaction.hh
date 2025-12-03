@@ -350,6 +350,7 @@ class Transaction {
 public:
     static constexpr unsigned tset_initial_capacity = 512;
     bool is_mr; // is multi-region transaction
+    bool is_read_only; // is read-only transaction (no writes)
 
     static constexpr unsigned hash_size = 1024;
     static constexpr unsigned hash_step = 5;
@@ -433,7 +434,7 @@ private:
     void initialize();
 
     Transaction()
-        : threadid_(TThread::id()), is_test_(false), is_mr(false) {
+        : threadid_(TThread::id()), is_test_(false), is_mr(false), is_read_only(false) {
         initialize();
         start();
     }
@@ -442,20 +443,27 @@ private:
     static testing_type testing;
 
     Transaction(int threadid, const testing_type&)
-        : threadid_(threadid), is_test_(true), is_mr(false) {
+        : threadid_(threadid), is_test_(true), is_mr(false), is_read_only(false) {
         initialize();
         start();
     }
 
     Transaction(bool)
-        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr)  {
+        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr), is_read_only(false)  {
         initialize();
         state_ = s_aborted;
         // init once
         start_time = mako::getCurrentTimeMillis();
     }
     Transaction(bool, bool is_mr)
-        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr)  {
+        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr), is_read_only(false)  {
+        initialize();
+        state_ = s_aborted;
+        // init once
+        start_time = mako::getCurrentTimeMillis();
+    }
+    Transaction(bool, bool is_mr, bool is_read_only)
+        : threadid_(TThread::id()), is_test_(false), is_mr(is_mr), is_read_only(is_read_only)  {
         initialize();
         state_ = s_aborted;
         // init once
@@ -653,11 +661,13 @@ private:
 
 public:
     void silent_abort() {
+        printf("[Transaction::silent_abort] Called - is_mr=%d, in_progress=%d\n", is_mr, in_progress());
         if (in_progress())
             stop(false, nullptr, 0);
     }
 
     void abort() {
+        printf("[Transaction::abort] Called - is_mr=%d\n", is_mr);
         silent_abort();
         throw Abort();
     }
@@ -668,6 +678,7 @@ public:
     void shard_install(uint32_t timestamp);
     void shard_serialize_util(uint32_t timestamp);
     void shard_unlock(bool committed);
+    void shard_unreserve();
 
     void commit() {
         if (!try_commit())
@@ -720,6 +731,46 @@ public:
                 abort_version_ = vers;
 #  endif
                 return false;
+            }
+# endif
+            relax_fence();
+        }
+#endif
+    }
+
+    // Atomic try_lock that fails if record is reserved (for SR transactions)
+    // Returns: 0 = success, 1 = contention (retry), 2 = reserved by MR (abort)
+    int try_lock_if_not_reserved(TransItem& item, TransactionTid::type& vers) {
+#if STO_SORT_WRITESET
+        (void) item;
+        TransactionTid::lock(vers, threadid_);
+        return 0;
+#else
+        unsigned n = 0;
+        while (1) {
+            int result = TransactionTid::try_lock_if_not_reserved(vers, threadid_);
+            if (result == 0)
+                return 0;  // Success - lock acquired
+            if (result == 2)
+                return 2;  // Reserved by MR - abort immediately
+            // result == 1: contention, retry with backoff
+            ++n;
+# if STO_SPIN_EXPBACKOFF
+            if (item.has_read() || n == STO_SPIN_BOUND_WRITE) {
+#  if STO_DEBUG_ABORTS
+                abort_version_ = vers;
+#  endif
+                return 1;  // Give up due to contention
+            }
+            if (n > 3)
+                for (unsigned x = 1 << std::min(15U, n - 2); x; --x)
+                    relax_fence();
+# else
+            if (item.has_read() || n == (1 << STO_SPIN_BOUND_WRITE)) {
+#  if STO_DEBUG_ABORTS
+                abort_version_ = vers;
+#  endif
+                return 1;  // Give up due to contention
             }
 # endif
             relax_fence();
@@ -881,14 +932,18 @@ private:
 
 class Sto {
 public:
-    static Transaction* transaction(bool is_mr = false) {
+    static Transaction* transaction(bool is_mr = false, bool is_read_only = false) {
         if (!TThread::txn)
-            TThread::txn = new Transaction(false, is_mr);
+            TThread::txn = new Transaction(false, is_mr, is_read_only);
+        else {
+            TThread::txn->is_mr = is_mr;  // Update is_mr for existing transaction
+            TThread::txn->is_read_only = is_read_only;  // Update is_read_only for existing transaction
+        }
         return TThread::txn;
     }
 
-    static void start_transaction(bool is_mr = false) {
-        Transaction* t = transaction(is_mr);
+    static void start_transaction(bool is_mr = false, bool is_read_only = false) {
+        Transaction* t = transaction(is_mr, is_read_only);
         if (TThread::mode() == 0)
             always_assert(!t->in_progress());
         t->start();
@@ -905,17 +960,20 @@ public:
     }
 
     static void abort() {
+        printf("[Sto::abort] Called\n");
         always_assert(in_progress());
         TThread::txn->abort();
     }
 
     static void abort_without_throw() {
+        printf("[Sto::abort_without_throw] Called\n");
         Sto::silent_abort();
         if (TThread::writeset_shard_bits>0||TThread::readset_shard_bits>0)
             TThread::sclient->remoteAbort(); 
     }
 
     static void silent_abort() {
+        printf("[Sto::silent_abort] Called - in_progress=%d\n", in_progress());
         if (in_progress())
             TThread::txn->silent_abort();
     }
@@ -1003,6 +1061,10 @@ public:
 
     static void shard_unlock(bool committed) {
         TThread::txn->shard_unlock(committed);
+    }
+
+    static void shard_unreserve() {
+        TThread::txn->shard_unreserve();
     }
 
     static TransactionTid::type commit_tid() {
