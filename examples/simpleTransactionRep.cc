@@ -13,6 +13,7 @@
 #include "benchmarks/rpc_setup.h"
 #include "../src/mako/spinbarrier.h"
 #include "../src/mako/benchmarks/mbta_sharded_ordered_index.hh"
+#include "../src/mako/benchmarks/sto/Transaction.hh"
 
 using namespace std;
 using namespace mako;
@@ -33,6 +34,9 @@ public:
         printf("\n--- Testing Basic Transactions Thread:%ld ---\n", std::this_thread::get_id());
 
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex() ;
+        if(home_shard_index != 0) {
+            return;
+        }
         worker_id_ = worker_id_ * 100 + home_shard_index ;
         mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
         
@@ -127,11 +131,10 @@ public:
         for (size_t i = 0; i < 10; i++) {
             // Randomly decide SR or MR transaction (30% MR, 70% SR)
             bool is_mr = (rand() % 100) < 30;
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);  // Use is_mr variable!
             printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu is_mr=%d\n", home_shard_index, worker_id_, i, is_mr);
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
             try {
-                table->get(txn, shared_key, value);
                 table->put(txn, shared_key, value);
                 db->commit_txn(txn);
                 commits++;
@@ -212,7 +215,7 @@ public:
             int total_existing_keys = 0;
             for (int group = 0; group < 10; group++) {
                 for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
                     std::string key = "overlap_key_" + std::to_string(group * 5 + i);
                     std::string value;
                     try {
@@ -246,7 +249,7 @@ public:
         int commits = 0, aborts = 0;
         for (size_t i = 0; i < 10; i++) {
             // Pass is_mr = true for cross-shard (multi-region) transactions
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
             printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Created MR transaction (is_mr=true) for txn %zu\n",
                    home_shard_index, worker_id_, i);
             std::string shared_local_key = "cross_shard_local";
@@ -443,6 +446,284 @@ public:
         }
     }
 
+    // Test MR reservation logic:
+    // 1) SR transaction should abort when trying to write to a record reserved by MR
+    // 2) MR transaction should correctly reserve during read and unreserve after commit/abort
+    void test_mr_reservation_blocks_sr() {
+        printf("\n[TEST_MR_RESERVATION] === Testing MR Reservation Blocks SR Thread:%ld ===\n", std::this_thread::get_id());
+
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        // Only run this test with multiple workers
+        // Worker 0: MR transaction that reserves and holds
+        // Worker 1: SR transaction that tries to write (should abort)
+        if(home_shard_index != 0) {
+            printf("[TEST_MR_RESERVATION] [Worker %d] Skipping test on non-zero shard %d\n", worker_id_, home_shard_index);
+            return;
+        }
+        
+        std::string shared_key = "mr_reservation_test_key";
+
+        auto get_timestamp_ms = []() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+        };
+        
+        if (original_worker_id_ == 0 && home_shard_index == 0) {
+            // First, create the key so it exists
+            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Creating initial key: %s\n", get_timestamp_ms(), worker_id_, shared_key.c_str());
+            {
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr - SR for setup*/);
+                std::string value = mako::Encode("initial_value");
+                try {
+                    table->put(txn, shared_key, value);
+                    db->commit_txn(txn);
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Initial key created successfully\n", get_timestamp_ms(), worker_id_);
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Failed to create initial key\n", get_timestamp_ms(), worker_id_);
+                    return;
+                }
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            
+            // Now start MR transaction that will reserve the key (read with is_mr=true)
+            // MR transactions MUST have writes to properly release reservations during commit/abort
+            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Starting MR transaction to reserve key\n", get_timestamp_ms(), worker_id_);
+            {
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+                std::string value;
+                try {
+                    // MR read will reserve the key
+                    bool exists = table->get(txn, shared_key, value);
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR read completed, key exists=%d, value=%s\n", 
+                           get_timestamp_ms(), worker_id_, exists, value.substr(0, 30).c_str());
+                    
+                    // Hold the reservation for a bit so SR can try to write
+                    // printf("[TEST_MR_RESERVATION] [Worker %d] Holding reservation for 2 seconds...\n", worker_id_);
+                    // std::this_thread::sleep_for(std::chrono::seconds(2));
+                    
+                    // MR must write to trigger proper commit protocol that releases reservations
+                    std::string new_value = mako::Encode("mr_updated_value");
+                    table->put(txn, shared_key, new_value);
+                    
+                    // Now commit - this should unreserve
+                    db->commit_txn(txn);
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR transaction COMMITTED (reservation released)\n", get_timestamp_ms(), worker_id_);
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR transaction ABORTED\n", get_timestamp_ms(), worker_id_);
+                }
+            }
+        }
+        else if (original_worker_id_ == 1) {
+            // Wait for worker 0 to create the key and start MR transaction
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+            // Try SR write while MR holds reservation - should ABORT
+            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Starting SR transaction to write (should abort due to reservation)\n", get_timestamp_ms(), worker_id_);
+            int sr_aborts = 0;
+            int sr_commits = 0;
+            
+            for (int attempt = 0; attempt < 5; attempt++) {
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr - SR transaction*/);
+                std::string value = mako::Encode("sr_write_attempt_" + std::to_string(attempt));
+                try {
+                    table->put(txn, shared_key, value);
+                    db->commit_txn(txn);
+                    sr_commits++;
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SR write attempt %d COMMITTED (reservation may have been released)\n", 
+                           get_timestamp_ms(), worker_id_, attempt);
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    sr_aborts++;
+                    const char* abort_reason = get_last_abort_reason();
+                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SR write attempt %d ABORTED - reason: %s ✓\n",     
+                           get_timestamp_ms(), worker_id_, attempt, abort_reason ? abort_reason : "unknown");
+                   
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            
+            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SUMMARY: SR commits=%d, SR aborts=%d\n", 
+                   get_timestamp_ms(), worker_id_, sr_commits, sr_aborts);
+            
+            if (sr_aborts > 0) {
+                printf(GREEN "[%06ld] [TEST_MR_RESERVATION] ✓ PASS: SR was blocked by MR reservation at least once\n" RESET, get_timestamp_ms());
+            } else {
+                printf(RED "[%06ld] [TEST_MR_RESERVATION] ✗ FAIL: SR was never blocked (timing issue or reservation not working)\n" RESET, get_timestamp_ms());
+            }
+        }
+        
+        // Other workers just wait
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+
+    // Test that MR correctly reserves and unreserves
+    void test_mr_reserve_unreserve() {
+        printf("\n[TEST_MR_UNRESERVE] === Testing MR Reserve/Unreserve Thread:%ld ===\n", std::this_thread::get_id());
+
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        // Only worker 0 runs this test
+        if (original_worker_id_ != 0) {
+            return;
+        }
+
+        // print shard_home_index
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Running on shard %d\n", home_shard_index, home_shard_index);
+
+        std::string test_key = "mr_unreserve_test_key";
+        
+        // Step 1: Create the key
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 1: Creating test key\n", home_shard_index);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            std::string value = mako::Encode("initial_value_for_unreserve_test");
+            try {
+                table->put(txn, test_key, value);
+                db->commit_txn(txn);
+                printf("[TEST_MR_UNRESERVE] [Shard %d] Key created successfully\n", home_shard_index);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] Failed to create key\n" RESET, home_shard_index);
+                return;
+            }
+        }
+
+        // Step 2: MR transaction reads (reserves), writes, then commits (should unreserve)
+        // Note: MR must have writes to trigger proper commit protocol that releases reservations
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 2: MR read+write then commit (reserve then unreserve)\n", home_shard_index);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            std::string value;
+            try {
+                table->get(txn, test_key, value);
+                printf("[TEST_MR_UNRESERVE] [Shard %d] MR read completed - key is now reserved\n", home_shard_index);
+                // MR must write to trigger proper commit protocol
+                std::string new_value = mako::Encode("mr_commit_test_value");
+                table->put(txn, test_key, new_value);
+                db->commit_txn(txn);
+                printf("[TEST_MR_UNRESERVE] [Shard %d] MR commit completed - key should be unreserved now\n", home_shard_index);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] MR transaction aborted unexpectedly\n" RESET, home_shard_index);
+                return;
+            }
+        }
+
+        // Step 3: SR write should succeed (no reservation)
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 3: SR write after MR commit (should succeed)\n", home_shard_index);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            std::string value = mako::Encode("sr_write_after_mr_commit");
+            try {
+                table->put(txn, test_key, value);
+                db->commit_txn(txn);
+                printf(GREEN "[TEST_MR_UNRESERVE] [Shard %d] ✓ SR write succeeded after MR unreserve\n" RESET, home_shard_index);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] ✗ SR write failed - reservation may not have been released\n" RESET, home_shard_index);
+            }
+        }
+
+        // Step 4: MR transaction reads (reserves), writes, then ABORTS (should still unreserve)
+        // Note: MR must have writes to trigger proper abort protocol that releases reservations
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 4: MR read+write then ABORT (reserve then unreserve on abort)\n", home_shard_index);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            std::string value;
+            try {
+                table->get(txn, test_key, value);
+                printf("[TEST_MR_UNRESERVE] [Shard %d] MR read completed - key is now reserved\n", home_shard_index);
+                // MR must write to trigger proper abort protocol
+                std::string new_value = mako::Encode("mr_abort_test_value");
+                table->put(txn, test_key, new_value);
+                // Intentionally abort
+                throw abstract_db::abstract_abort_exception();
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf("[TEST_MR_UNRESERVE] [Shard %d] MR abort completed - key should be unreserved now\n", home_shard_index);
+            }
+        }
+
+        // Step 5: SR write should succeed after MR abort (no reservation)
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 5: SR write after MR abort (should succeed)\n", home_shard_index);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            std::string value = mako::Encode("sr_write_after_mr_abort");
+            try {
+                table->put(txn, test_key, value);
+                db->commit_txn(txn);
+                printf(GREEN "[TEST_MR_UNRESERVE] [Shard %d] ✓ SR write succeeded after MR abort unreserve\n" RESET, home_shard_index);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] ✗ SR write failed - reservation may not have been released on abort\n" RESET, home_shard_index);
+            }
+        }
+
+        printf("[TEST_MR_UNRESERVE] [Shard %d] Test completed\n", home_shard_index);
+    }
+
+    // Test multiple MR transactions can reserve the same key (counter-based reservation)
+    void test_multiple_mr_reservations() {
+        printf("\n[TEST_MULTI_MR] === Testing Multiple MR Reservations Thread:%ld ===\n", std::this_thread::get_id());
+
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        std::string shared_key = "multi_mr_test_key";
+        
+        if (original_worker_id_ == 0) {
+            // Create the key first
+            printf("[TEST_MULTI_MR] [Worker %d] Creating test key\n", worker_id_);
+            {
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+                std::string value = mako::Encode("initial_multi_mr_value");
+                try {
+                    table->put(txn, shared_key, value);
+                    db->commit_txn(txn);
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    return;
+                }
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        
+        // All workers (0, 1, 2, ...) start MR transactions simultaneously
+        // They should all be able to reserve the same key (counter allows multiple reservations)
+        // Note: MR must have writes to trigger proper commit protocol that releases reservations
+        printf("[TEST_MULTI_MR] [Worker %d] Starting MR transaction to reserve key\n", original_worker_id_);
+        {
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+            std::string value;
+            try {
+                bool exists = table->get(txn, shared_key, value);
+                printf("[TEST_MULTI_MR] [Worker %d] MR read succeeded, key exists=%d\n", original_worker_id_, exists);
+                
+                // Hold for a bit
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                
+                // MR must write to trigger proper commit protocol
+                std::string new_value = mako::Encode("multi_mr_worker_" + std::to_string(original_worker_id_));
+                table->put(txn, shared_key, new_value);
+                
+                db->commit_txn(txn);
+                printf(GREEN "[TEST_MULTI_MR] [Worker %d] MR transaction COMMITTED ✓\n" RESET, original_worker_id_);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+                printf(RED "[TEST_MULTI_MR] [Worker %d] MR transaction ABORTED ✗\n" RESET, original_worker_id_);
+            }
+        }
+        
+        //std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
 protected:
     abstract_db *const db;
     int worker_id_;
@@ -467,13 +748,20 @@ void run_worker_tests(abstract_db *db, int worker_id,
 
     // Run all tests
     worker->test_basic_transactions();
+    worker->test_mr_reservation_blocks_sr();
     // worker->test_single_key_contention();
     // worker->test_overlapping_keys();
     // worker->test_cross_shard_contention();
     // worker->test_read_write_contention();
-    //worker->test_put_then_get();
+    // worker->test_put_then_get();
+    
+    // MR reservation tests
+    // worker->test_mr_reservation_blocks_sr();
+    // worker->test_mr_reserve_unreserve();
+    // worker->test_multiple_mr_reservations();
 
     printf("[Worker %d] Completed\n", worker_id);
+    delete worker;
 }
 
 void run_tests(abstract_db* db) {

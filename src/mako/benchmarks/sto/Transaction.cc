@@ -13,6 +13,17 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
+// Thread-local variable to store the last abort reason (accessible from tests)
+__thread const char* TThread_last_abort_reason = nullptr;
+
+const char* get_last_abort_reason() {
+    return TThread_last_abort_reason ? TThread_last_abort_reason : "unknown";
+}
+
+void set_last_abort_reason(const char* reason) {
+    TThread_last_abort_reason = reason;
+}
+
 std::function<int()> callback_ = nullptr;
 void register_sync_util(std::function<int()> cb)
 {
@@ -144,9 +155,14 @@ void Transaction::hard_check_opacity(TransItem *item, TransactionTid::type t)
     if (state_ == s_committing || state_ == s_committing_locked)
         return;
 
-    // ignore if version hasn't changed
-    if (item && item->has_read() && item->read_value<TransactionTid::type>() == t)
-        return;
+    // ignore if version hasn't changed (mask out reservation bits for comparison)
+    // Reservation bits (0xF000) should not trigger opacity checks
+    if (item && item->has_read()) {
+        TransactionTid::type read_val = item->read_value<TransactionTid::type>();
+        TransactionTid::type mask = ~TransactionTid::reservation_mask;  // Mask out reservation bits
+        if ((read_val & mask) == (t & mask))
+            return;
+    }
 
     // die on recursive opacity check; this is only possible for predicates
     if (unlikely(state_ == s_opacity_check))
@@ -221,14 +237,12 @@ void Transaction::stop(bool committed, unsigned *writeset, unsigned nwriteset)
     }
 
     // For MR transactions, unreserve all reserved records in the readset
-    printf("[Transaction::stop] is_mr=%d, tset_size_=%u\n", is_mr, tset_size_);
     if (is_mr)
     {
         TransItem *it = nullptr;
         for (unsigned tidx = 0; tidx != tset_size_; ++tidx)
         {
             it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
-            printf("[Transaction::stop] tidx=%u, has_read=%d\n", tidx, it->has_read());
             if (it->has_read())
             {
                 // Use TObject interface to unreserve (similar to how unlock is called)
@@ -349,7 +363,6 @@ bool Transaction::shard_try_lock_last_writeset()
 int Transaction::shard_validate()
 {
 
-    printf("[Transaction::shard_validate] is_mr=%d, tset_size_=%u\n", is_mr, tset_size_);
     // print_stats();
     assert(TThread::id() == threadid_);
 
@@ -506,8 +519,6 @@ void Transaction::shard_unreserve()
     if (!is_mr)
         return;
 
-    printf("[Transaction::shard_unreserve] Unreserving %u items\n", tset_size_);
-
     TransItem *it = nullptr;
     for (unsigned tidx = tset_size_ - 1; tidx >= 0; --tidx)
     {
@@ -522,7 +533,6 @@ void Transaction::shard_unreserve()
 
 bool Transaction::try_commit(bool no_paxos)
 {
-    printf("[Transaction::try_commit] Called - is_mr=%d, tset_size_=%u, any_writes_=%d\n", is_mr, tset_size_, any_writes_);
     assert(TThread::id() == threadid_);
 #if ASSERT_TX_SIZE
     if (tset_size_ > TX_SIZE_LIMIT)
@@ -599,6 +609,11 @@ bool Transaction::try_commit(bool no_paxos)
 
     if (ret > 0)
     {
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+        printf("[%06ld] [TXN_ABORT] Remote batch lock failed (thread_id=%d, is_mr=%d)\n", 
+               now_ms, TThread::id(), is_mr);
+        set_last_abort_reason("remote batch lock failed");
         goto abort;
     }
 
@@ -620,16 +635,26 @@ bool Transaction::try_commit(bool no_paxos)
             // For SR transactions on local writes, use atomic lock_if_not_reserved
             if (!isRemote && !is_mr)
             {
-                printf("[Transaction::try_commit] tidx=%u, atomic lock_if_not_reserved for SR txn\n", tidx);
                 int result = it->owner()->lock_if_not_reserved(*it, *this);
                 if (result == 2)
                 {
                     // Reserved by MR transaction - SR cannot proceed
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                    printf("[%06ld] [SR_ABORT*] SR transaction aborted - record reserved by MR txn (thread_id=%d)\n", 
+                           now_ms, TThread::id());
+                    set_last_abort_reason("record reserved by MR txn");
                     mark_abort_because(it, "record reserved by MR txn (atomic check)");
                     goto abort;
                 }
                 if (result != 0)
                 {
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                    printf("[%06ld] [SR_ABORT**] SR transaction aborted - record reserved by MR txn (thread_id=%d)\n", 
+                           now_ms, TThread::id());
+                    set_last_abort_reason("commit lock contention");
+                    mark_abort_because(it, "record reserved by MR txn (atomic check)");
                     mark_abort_because(it, "commit lock contention");
                     goto abort;
                 }
@@ -639,6 +664,11 @@ bool Transaction::try_commit(bool no_paxos)
                 // MR transaction or remote - just lock normally
                 if (!it->owner()->lock(*it, *this))
                 {
+                    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                    printf("[%06ld] [TXN_ABORT] Commit lock failed for MR/remote txn (thread_id=%d, is_mr=%d)\n", 
+                           now_ms, TThread::id(), is_mr);
+                    set_last_abort_reason("commit lock failed for MR/remote txn");
                     mark_abort_because(it, "commit lock");
                     goto abort;
                 }
@@ -655,6 +685,11 @@ bool Transaction::try_commit(bool no_paxos)
             TXP_INCREMENT(txp_total_check_predicate);
             if (!it->owner()->check_predicate(*it, *this, true))
             {
+                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                printf("[%06ld] [TXN_ABORT] Commit check_predicate failed (thread_id=%d, is_mr=%d)\n", 
+                       now_ms, TThread::id(), is_mr);
+                set_last_abort_reason("commit check_predicate failed");
                 mark_abort_because(it, "commit check_predicate");
                 goto abort;
             }
@@ -679,6 +714,11 @@ bool Transaction::try_commit(bool no_paxos)
             TransItem *me = &tset_[*it / tset_chunk][*it % tset_chunk];
             if (!me->owner()->lock(*me, *this))
             {
+                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                printf("[%06ld] [TXN_ABORT] Commit lock failed (sorted writeset) (thread_id=%d, is_mr=%d)\n", 
+                       now_ms, TThread::id(), is_mr);
+                set_last_abort_reason("commit lock failed (sorted writeset)");
                 mark_abort_because(me, "commit lock");
                 goto abort;
             }
@@ -723,6 +763,11 @@ bool Transaction::try_commit(bool no_paxos)
             if (!it->owner()->check(*it, *this) // this is just a version check
                 && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
             {
+                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                printf("[%06ld] [TXN_ABORT] Commit version check failed (thread_id=%d, is_mr=%d)\n", 
+                       now_ms, TThread::id(), is_mr);
+                set_last_abort_reason("commit version check failed");
                 mark_abort_because(it, "commit check");
                 goto abort;
             }
@@ -741,6 +786,11 @@ bool Transaction::try_commit(bool no_paxos)
         }
         if (ret > 0)
         {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+            printf("[%06ld] [TXN_ABORT] Remote validate failed (thread_id=%d, is_mr=%d)\n", 
+                   now_ms, TThread::id(), is_mr);
+            set_last_abort_reason("remote validate failed");
             goto abort;
         }
     }

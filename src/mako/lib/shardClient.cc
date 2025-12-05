@@ -240,6 +240,7 @@ namespace mako
     // simple get function
     int ShardClient::remoteGet(int remote_table_id, std::string key, std::string &value, bool is_mr, bool is_read_only)
     {
+        printf("[ShardClient::remoteGet] called for key: %.*s\n", (int)key.length(), key.data());
         int table_id = remote_table_id;
         int dstShardIndex = (remote_table_id - 1) / mako::NUM_TABLES_PER_SHARD;
 

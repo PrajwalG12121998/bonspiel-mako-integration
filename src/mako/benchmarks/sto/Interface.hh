@@ -199,30 +199,44 @@ public:
 
     // Reservation counter methods for MR transactions
     // MR transactions call this during read phase to reserve records
-    // Must wait if record is locked (by another transaction in commit phase)
-    static bool try_reserve(type& v) {
-        while (true) {
-            type old_v = v;
-            
-            // Wait if record is locked (someone is in commit phase)
-            if (is_locked(old_v)) {
-                relax_fence();
-                continue;  // Spin until unlocked
+    // Returns: 0 = success, 1 = retry (locked or CAS failed), 2 = max reservations reached
+    static int try_reserve(type& v) {
+        type old_v = v;
+        
+        // Fail if record is locked (someone is in commit phase)
+        if (is_locked(old_v)) {
+            return 1;  // Locked - caller should retry
+        }
+        
+        // Check if max reservations reached
+        type count = (old_v & reservation_mask) >> reservation_shift;
+        if (count >= reservation_max) {
+            return 2;  // Max reservations reached - abort
+        }
+        
+        // Try to atomically increment reservation counter
+        type new_v = old_v + reservation_inc;
+        if (bool_cmpxchg(&v, old_v, new_v)) {
+            return 0;  // Success
+        }
+        
+        return 1;  // CAS failed - caller should retry
+    }
+    
+    // Bounded retry with fast fail for MR transactions
+    static bool reserve_with_timeout(type& v, int max_retries = 10) {
+        for (int i = 0; i < max_retries; i++) {
+            int result = try_reserve(v);
+            if (result == 0) {
+                return true;  // Success
             }
-            
-            // Check if max reservations reached
-            type count = (old_v & reservation_mask) >> reservation_shift;
-            if (count >= reservation_max) {
-                return false;  // Max reservations reached
+            if (result == 2) {
+                return false;  // Max reservations - abort immediately
             }
-            
-            // Try to atomically increment reservation counter
-            type new_v = old_v + reservation_inc;
-            if (bool_cmpxchg(&v, old_v, new_v)) {
-                return true;
-            }
+            // result == 1: retry (lock held or CAS failed)
             relax_fence();
         }
+        return false;  // Timeout after max_retries - abort
     }
 
     static void unreserve(type& v) {

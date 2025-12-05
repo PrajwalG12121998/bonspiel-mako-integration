@@ -56,12 +56,13 @@ namespace mako
 
     // Message handlers.
     size_t ShardReceiver::ReceiveRequest(uint8_t reqType, char *reqBuf, char *respBuf)
-    {
+    {   printf("[ShardReceiver::ReceiveRequest] requestType received: %d\n", reqType);
         Debug("server deal with reqType: %d", reqType);
         size_t respLen;
         switch (reqType)
         {
         case getReqType:
+            printf("HandleGetRequest called\n");
             HandleGetRequest(reqBuf, respBuf, respLen);
             break;
         case scanReqType:
@@ -180,7 +181,6 @@ namespace mako
         int status = ErrorCode::SUCCESS;
         auto *req = reinterpret_cast<basic_request_t *>(reqBuf);
         try {
-            printf("[ShardReceiver::HandleValidateRequest] req_nr=%u\n", req->req_nr);
             status = db->shard_validate();
             if (status>0){
                 //db->shard_abort_txn(nullptr); // early reject, unlock the key earlier
@@ -317,8 +317,8 @@ namespace mako
         if (TThread::txn) {
             TThread::txn->is_mr = req->is_mr;
         }
-        printf("[Server::HandleBatchLockRequest] req->is_mr=%d, TThread::txn->is_mr=%d\n", 
-               (int)req->is_mr, TThread::txn ? TThread::txn->is_mr : -1);
+        // print mr status
+        printf("[ShardReceiver::HandleBatchLockRequest] is_mr: %d\n", req->is_mr);
 
         uint16_t table_id, klen, vlen;
         char *k_ptr, *v_ptr;
@@ -550,9 +550,8 @@ namespace mako
                         TThread::txn->is_mr = req->is_mr;
                         TThread::txn->is_read_only = req->is_read_only;
                     }
-                    printf("[Server::HandleGetRequest] req->is_mr=%d, req->is_read_only=%d, TThread::txn->is_mr=%d, table_id=%d\n", 
-                           (int)req->is_mr, (int)req->is_read_only, TThread::txn ? TThread::txn->is_mr : -1, req->table_id);
                     bool ret = it->second->shard_get(obj_key0, obj_v);
+                    printf("Shard get returned with return value %d\n", ret ? 1 : 0);
                     // abort here,
                     //  "not found a key" maybe a expected behavior
                     if (!ret){ // key not found or found but invalid
@@ -613,7 +612,7 @@ namespace mako
     }
 
     void ShardServer::Run()
-    {
+    {   
         while (true) {
             queue->suspend();
 

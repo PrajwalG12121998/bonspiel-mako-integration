@@ -137,6 +137,7 @@ public:
 
     // transGet and friends
     get_type transGet(size_type i) const {
+        printf("[TVector::transGet] called for index %d\n", i);
         TransProxy item = Sto::item(this, i);
         if (item.has_write()) {
             if (item.has_flag(pop_bit)) {

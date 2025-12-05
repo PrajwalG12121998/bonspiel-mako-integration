@@ -88,6 +88,10 @@
 
 void register_sync_util(std::function<int()>);
 
+// Functions to get/set the last abort reason (for debugging/testing)
+const char* get_last_abort_reason();
+void set_last_abort_reason(const char* reason);
+
 class StringAllocator{
  private:
   unsigned char *LOG;
@@ -955,6 +959,14 @@ public:
     }
 
     static bool in_progress() {
+        if (!TThread::txn) {
+            //printf("[Sto::in_progress] Called - mode=%d, txn=%p\n", TThread::mode(), TThread::txn);
+            //return false;
+        }
+        else{
+            //printf("[Sto::in_progress] Called - mode=%d, txn=%p, state=%d\n", TThread::mode(), TThread::txn, TThread::txn->state_);
+        }
+        //printf("[Sto::in_progress] Called - mode=%d, txn=%p\n", TThread::mode(), TThread::txn);
         return TThread::mode() == 1 ||
                     (TThread::mode() == 0 && TThread::txn && TThread::txn->in_progress());
     }

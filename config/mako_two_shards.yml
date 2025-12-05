@@ -1,0 +1,23 @@
+# Two shard configuration for Mako testing
+# This configuration runs 2 shards on all interfaces (accessible via public IP)
+
+sites:
+    - name: "local_s0"
+      id: 1
+      ip: 20.83.166.15
+      port: 31000
+    - name: "local_s1"
+      id: 2
+      ip: 20.83.166.15
+      port: 31100
+
+# Two shards with no replication
+shard_map:
+    - ["local_s0"]  # Shard 0 with only one node (leader)
+    - ["local_s1"]  # Shard 1 with only one node (leader)
+
+# Configuration parameters
+warehouses: 6  # number of warehouses per shard
+
+# Memory control ports
+memlocalhost: 31500

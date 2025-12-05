@@ -91,12 +91,12 @@ public:
   std::string *arena(void);
 
   bool get(void *txn, lcdf::Str key, std::string &value, size_t max_bytes_read) {
-    printf("[mbta_wrapper::get] Called, is_remote: %d\n", mbta.get_is_remote());
+    //printf("[mbta_wrapper::get] Called, is_remote: %d\n", mbta.get_is_remote());
     if (!mbta.get_is_remote()) {
-      printf("[mbta_wrapper::get] LOCAL path - calling mbta.transGet()\n");
-      STD_OP({
+      //printf("[mbta_wrapper::get] LOCAL path - calling mbta.transGet()\n");
+      STD_OP({ 
         bool ret = mbta.transGet(key, value);
-        printf("[mbta_wrapper::get] transGet returned: %d, value_len: %zu\n", ret, value.length());
+        //printf("[mbta_wrapper::get] transGet returned: %d, value_len: %zu\n", ret, value.length());
         if (ret) {
           UPDATE_VS(value.data(),value.length())
           if (value.length() >= mako::EXTRA_BITS_FOR_VALUE) value.resize(value.length() - mako::EXTRA_BITS_FOR_VALUE);
@@ -104,6 +104,7 @@ public:
         return ret;
       });
     } else {
+      //printf("[mbta_wrapper::remoteGet] REMOTE path - invoking remoteGet RPC\n");
       bool is_mr = TThread::txn ? TThread::txn->is_mr : false;
       bool is_read_only = TThread::txn ? TThread::txn->is_read_only : false;
       int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value, is_mr, is_read_only);
@@ -137,7 +138,9 @@ public:
   // handle get request from a remote shard
   bool shard_get(lcdf::Str key, std::string &value, size_t max_bytes_read = std::string::npos) {
     STD_OP({
+      //printf("[mbta_wrapper::shard_get] remote call called for key: %.*s\n", (int)key.length(), key.data());
       bool ret = mbta.transGet(key, value);
+      //printf("[mbta_wrapper::shard_get] remote call returned: %d\n", ret);
       return ret;
     });
   }

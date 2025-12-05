@@ -1606,16 +1606,9 @@ tpcc_worker::txn_new_order_simple() {
       int oorder_id = local_oorder_id * 100 + TThread::getPartitionID();
       ids.push_back(oorder_id);
       bool is_remote=false;
-      // Determine if this transaction will access remote shard (is_mr)
-      bool is_mr = (remote_warehouse_id > 0 && 
-                    !WarehouseInShard(remote_warehouse_id, BenchmarkConfig::getInstance().getShardIndex()) && 
-                    (c_id == 4 || c_id == 5));
       retry:
       arena.reset();
-      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);
-      if (is_mr) {
-        printf("[tpcc::txn_new_order_simple] Created MR transaction for c_id=%d, remote_warehouse=%d\n", c_id, remote_warehouse_id);
-      }
+      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT, false);
       try {
         // Tranasction-1
         {
@@ -1635,7 +1628,7 @@ tpcc_worker::txn_new_order_simple() {
           v_oo_new.o_carrier_id = c_id;
           tbl_oorder(warehouse_id)->insert(txn, Encode(k_oo), Encode(str(), v_oo_new));
 
-          if (remote_warehouse_id > 0 && !WarehouseInShard(remote_warehouse_id, BenchmarkConfig::getInstance().getShardIndex()) && (c_id == 4||c_id == 5)) {
+          if (remote_warehouse_id > 0 && !WarehouseInShard(remote_warehouse_id, BenchmarkConfig::getInstance().getShardIndex())) {
             customer::key r_k_c(WarehouseGlobal2Local(remote_warehouse_id), 1, c_id);
             //Warning("[DEBUG]client tries to get, w_id:%d,d:%d,c_id:%d,oorder_id:%d,len of obj_v(garbage):%d",WarehouseGlobal2Local(remote_warehouse_id), 1, c_id,oorder_id,obj_v.size());
             ALWAYS_ERROR(remote_tbl_customer(remote_warehouse_id)->get(txn, Encode(obj_key0, r_k_c), obj_v));
