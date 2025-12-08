@@ -5,11 +5,11 @@ sites:
     - name: "local_s0"
       id: 1
       ip: 20.83.166.15
-      port: 31000
+      port: 8000
     - name: "local_s1"
       id: 2
-      ip: 20.83.166.15
-      port: 31100
+      ip: 20.120.242.218
+      port: 8000
 
 # Two shards with no replication
 shard_map:
@@ -17,7 +17,9 @@ shard_map:
     - ["local_s1"]  # Shard 1 with only one node (leader)
 
 # Configuration parameters
-warehouses: 6  # number of warehouses per shard
+warehouses: 2  # number of warehouses per shard
 
 # Memory control ports
 memlocalhost: 31500
+
+runtime: 300  # Run for 300 seconds (5 minutes)

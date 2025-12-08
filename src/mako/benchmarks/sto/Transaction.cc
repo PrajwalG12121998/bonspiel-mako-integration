@@ -218,6 +218,16 @@ void Transaction::stop(bool committed, unsigned *writeset, unsigned nwriteset)
     if (!committed)
     {
         TXP_INCREMENT(txp_total_aborts);
+        
+        // Print abort reason for MR transactions
+        if (is_mr) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+            printf("[%06ld] [MR_TXN_ABORT_REASON] thread_id=%d, state=%s", 
+                   now_ms, TThread::id(), state_name(state_)); 
+            printf("\n");
+        }
+        
 #if STO_DEBUG_ABORTS
         if (local_random() <= uint32_t(0xFFFFFFFF * STO_DEBUG_ABORTS_FRACTION))
         {
@@ -330,11 +340,12 @@ bool Transaction::shard_try_lock_last_writeset()
         {
             // For SR transactions, use atomic lock_if_not_reserved to avoid race condition
             if (!is_mr)
-            {
+            {   
                 int result = it->owner()->lock_if_not_reserved(*it, *this);
                 if (result == 2)
                 {
                     // Reserved by MR transaction - SR cannot proceed
+                    printf("SR_ABORT* SR transaction aborted New: because MR reserved the record %d\n", TThread::id());
                     return false;
                 }
                 if (result != 0)
@@ -348,6 +359,7 @@ bool Transaction::shard_try_lock_last_writeset()
                 // MR transaction - just lock normally
                 if (!it->owner()->lock(*it, *this))
                 {
+                    //printf("[REMOTE_SHARD_LOCK] Lock failed for MR transaction (thread_id=%d)\n", TThread::id());
                     return false;
                 }
             }
@@ -391,6 +403,15 @@ int Transaction::shard_validate()
         {
             if (!it->owner()->check(*it, *this) && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
             {
+                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+                    if(is_mr) {
+                        printf("MR_ABORT* Remote shard validation failed - version changed (thread_id=%d, tidx=%u, tset_size=%u, nwriteset=%d)\n",
+                               TThread::id(), tidx, tset_size_, nwriteset);
+                    } else {
+                        printf("SR_ABORT* Local shard validation failed - version changed (thread_id=%d, tidx=%u, tset_size=%u, nwriteset=%d)\n",
+                               TThread::id(), tidx, tset_size_, nwriteset);
+                    }
                 return 1;
             }
         }
@@ -641,8 +662,9 @@ bool Transaction::try_commit(bool no_paxos)
                     // Reserved by MR transaction - SR cannot proceed
                     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-                    printf("[%06ld] [SR_ABORT*] SR transaction aborted - record reserved by MR txn (thread_id=%d)\n", 
-                           now_ms, TThread::id());
+                    printf("[%06ld] [SR_ABORT_RESERVATION] SR transaction aborted - record reserved by MR txn (thread_id=%d, tidx=%u)\n", 
+                           now_ms, TThread::id(), tidx);
+                    printf("[SR_ABORT_RESERVATION] Reservation system working correctly - SR blocked by MR reservation\n");
                     set_last_abort_reason("record reserved by MR txn");
                     mark_abort_because(it, "record reserved by MR txn (atomic check)");
                     goto abort;
@@ -651,10 +673,9 @@ bool Transaction::try_commit(bool no_paxos)
                 {
                     auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-                    printf("[%06ld] [SR_ABORT**] SR transaction aborted - record reserved by MR txn (thread_id=%d)\n", 
-                           now_ms, TThread::id());
+                    printf("[%06ld] [SR_ABORT_CONTENTION] SR transaction aborted - lock contention (thread_id=%d, tidx=%u)\n", 
+                           now_ms, TThread::id(), tidx);
                     set_last_abort_reason("commit lock contention");
-                    mark_abort_because(it, "record reserved by MR txn (atomic check)");
                     mark_abort_because(it, "commit lock contention");
                     goto abort;
                 }
@@ -765,8 +786,15 @@ bool Transaction::try_commit(bool no_paxos)
             {
                 auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-                printf("[%06ld] [TXN_ABORT] Commit version check failed (thread_id=%d, is_mr=%d)\n", 
-                       now_ms, TThread::id(), is_mr);
+                if (is_mr) {
+                    printf("[%06ld] [MR_ABORT_VERSION_CHECK] MR transaction aborted - version check failed (thread_id=%d, tidx=%u, tset_size=%u)\n", 
+                           now_ms, TThread::id(), tidx, tset_size_);
+                    printf("[MR_ABORT_VERSION_CHECK] This means a record's version changed between read and commit\n");
+                    printf("[MR_ABORT_VERSION_CHECK] Likely cause: SR transaction committed after MR reserved but before MR returned from network\n");
+                } else {
+                    printf("[%06ld] [TXN_ABORT] Commit version check failed (thread_id=%d, is_mr=%d)\n", 
+                           now_ms, TThread::id(), is_mr);
+                }
                 set_last_abort_reason("commit version check failed");
                 mark_abort_because(it, "commit check");
                 goto abort;
@@ -882,6 +910,12 @@ bool Transaction::try_commit(bool no_paxos)
     // if (TThread::writeset_shard_bits > 0) {
     //     TThread::sclient->remoteUnLock();
     // }
+    if (is_mr) {
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+        //printf("[%06ld] [MR_COMMIT_SUCCESS] MR transaction committed successfully (thread_id=%d, tset_size=%u)\n", 
+        //       now_ms, TThread::id(), tset_size_);
+    }
     return true;
 
 abort:
@@ -890,6 +924,7 @@ abort:
     if (TThread::writeset_shard_bits > 0 || TThread::readset_shard_bits > 0)
     {
         TThread::sclient->remoteAbort();
+        printf("SR_ABORT* SR transaction aborted New: %d\n", TThread::id());
     }
     return false;
 }

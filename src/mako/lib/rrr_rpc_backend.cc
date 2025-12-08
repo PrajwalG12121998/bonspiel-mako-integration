@@ -72,11 +72,15 @@ int RrrRpcBackend::Initialize(const std::string& local_uri,
 
     // Register request handlers for all request types
     // Note: We capture both req_type and 'this' in the lambda
+    printf("[RRR_BACKEND] Registering handlers for request types %d to %d (inclusive)\n", st_nr_req_types, end_nr_req_types);
     for (uint8_t req_type = st_nr_req_types; req_type <= end_nr_req_types; req_type++) {
+        printf("[RRR_BACKEND] - Registering handler for request type %d\n", req_type);
         server_->reg(req_type, [this, req_type](rusty::Box<rrr::Request> req, rrr::WeakServerConnection weak_sconn) {
             RequestHandler(req_type, std::move(req), weak_sconn, this);
         });
     }
+    printf("[RRR_BACKEND] Successfully registered %d handlers\n", (end_nr_req_types - st_nr_req_types + 1));
+    fflush(stdout);
 
     // Start listening on the port
     int ret = server_->start(("0.0.0.0:" + port_str).c_str());
@@ -84,6 +88,16 @@ int RrrRpcBackend::Initialize(const std::string& local_uri,
         Panic("Failed to start rrr::Server on port %s", port_str.c_str());
         return ret;
     }
+
+    printf("\n[RRR_BACKEND] ========================================\n");
+    printf("[RRR_BACKEND] SERVER STARTED\n");
+    printf("[RRR_BACKEND] Listening on: 0.0.0.0:%s\n", port_str.c_str());
+    printf("[RRR_BACKEND] Shard Index: %d\n", shard_idx_);
+    printf("[RRR_BACKEND] Server ID: %d\n", id_);
+    printf("[RRR_BACKEND] Cluster: %s\n", cluster_.c_str());
+    printf("[RRR_BACKEND] Handler range: %d-%d\n", st_nr_req_types, end_nr_req_types);
+    printf("[RRR_BACKEND] ========================================\n\n");
+    fflush(stdout);
 
     Notice("RrrRpcBackend initialized on %s (listening on 0.0.0.0:%s)",
            local_uri.c_str(), port_str.c_str());
@@ -218,14 +232,20 @@ rusty::Option<rusty::Arc<rrr::Client>> RrrRpcBackend::GetOrCreateClient(uint8_t 
     int port = std::atoi(config_.shard(shard_idx, clusterRoleSentTo).port.c_str()) + server_id;
     std::string addr = config_.shard(shard_idx, clusterRoleSentTo).host + ":" + std::to_string(port);
 
+    printf("[RRR_BACKEND] GetOrCreateClient: Connecting to %s (shard=%d, server=%d)\n", addr.c_str(), shard_idx, server_id);
+    fflush(stdout);
     Debug("GetOrCreateClient: Connecting to %s", addr.c_str());
 
     int ret = client->connect(addr.c_str());
     if (ret != 0) {
+        printf("[RRR_BACKEND] GetOrCreateClient: Failed to connect to %s (error %d)\n", addr.c_str(), ret);
+        fflush(stdout);
         //Warning("Failed to connect to %s (error %d)", addr.c_str(), ret);
         clients_lock_.unlock();
         return rusty::None;  // Return None
     }
+    printf("[RRR_BACKEND] GetOrCreateClient: Successfully connected to %s\n", addr.c_str());
+    fflush(stdout);
 
     // Store client
     clients_.emplace(session_key, client.clone());
@@ -241,6 +261,10 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
                                 uint8_t shard_idx,
                                 uint16_t server_id,
                                 size_t msg_len) {
+    // printf("[RRR_BACKEND] SendToShard: req_type=%d, shard_idx=%d, server_id=%d, msg_len=%zu\n",
+        //    req_type, shard_idx, server_id, msg_len);
+    fflush(stdout);
+    
     // Early return if stopping - don't start new RPC operations
     if (stop_) {
         Warning("RrrRpcBackend::SendToShard: stop requested, not sending (req_type=%d)", req_type);
@@ -272,7 +296,7 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
     }
     auto fu = fu_result.unwrap();
 
-    Debug("RrrRpcBackend::SendToShard: begin_request succeeded, writing request data");
+    // Debug("RrrRpcBackend::SendToShard: begin_request succeeded, writing request data");
 
     // Write request data using client's << operator
     rrr::Marshal m;
@@ -282,19 +306,23 @@ bool RrrRpcBackend::SendToShard(TransportReceiver* src,
     msg_size_req_sent_ += msg_len;
     msg_counter_req_sent_ += 1;
 
-    Debug("RrrRpcBackend::SendToShard: Calling end_request to send RPC");
+    // Debug("RrrRpcBackend::SendToShard: Calling end_request to send RPC");
 
     // Send request
     client->end_request();
 
-    Debug("RrrRpcBackend::SendToShard: Waiting for response");
+    // Debug("RrrRpcBackend::SendToShard: Waiting for response");
 
     // Wait for response
     fu->timed_wait(1);
 
     if (fu->timed_out()) {
+        printf("[RRR_BACKEND] SendToShard: TIMEOUT for req_type=%d to shard=%d\n", req_type, shard_idx);
+        fflush(stdout);
         throw 1002;
     }
+    // printf("[RRR_BACKEND] SendToShard: Response received for req_type=%d from shard=%d\n", req_type, shard_idx);
+    fflush(stdout);
 
     // Check stop again after wait - client might have been closed during wait
     if (stop_) {
@@ -693,6 +721,9 @@ void RrrRpcBackend::PrintStats() {
 
 // Static request handler for rrr::Server
 void RrrRpcBackend::RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> req, rrr::WeakServerConnection weak_sconn, RrrRpcBackend* backend) {
+    // printf("[RRR_BACKEND] RequestHandler called for req_type=%d\n", req_type);
+    fflush(stdout);
+    
     if (!backend) {
         Warning("RequestHandler called with null backend pointer!");
         return;
@@ -809,6 +840,9 @@ void RrrRpcBackend::RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> re
     auto* target_server_id_reader = (TargetServerIDReader*)temp_buffer.data();
     uint16_t target_server_id = target_server_id_reader->targert_server_id;
 
+    // printf("[RRR_BACKEND] RequestHandler: Extracted target_server_id=%d for req_type=%d\n", target_server_id, req_type);
+    fflush(stdout); 
+
     // Create RrrRequestHandle with backend and server_id
     auto rrr_handle = std::make_unique<RrrRequestHandle>(std::move(req), sconn, req_type, backend, target_server_id);
 
@@ -818,6 +852,13 @@ void RrrRpcBackend::RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> re
     // Find the appropriate helper queue
     auto it = backend->queue_holders_.find(target_server_id);
     if (it == backend->queue_holders_.end()) {
+        // printf("[RRR_BACKEND] RequestHandler: No helper queue found for server_id=%d (available queues: %zu)\n",
+                // target_server_id, backend->queue_holders_.size());
+        // Print all available queue IDs
+        for (auto& q : backend->queue_holders_) {
+            // printf("[RRR_BACKEND]   Available queue for server_id: %d\n", q.first);
+        }
+        fflush(stdout);
         Warning("No helper queue found for server_id %d (available queues: %zu)",
                 target_server_id, backend->queue_holders_.size());
         // Print all available queue IDs
@@ -827,6 +868,8 @@ void RrrRpcBackend::RequestHandler(uint8_t req_type, rusty::Box<rrr::Request> re
         return;
     }
     auto* helper_queue = it->second;
+    // printf("[RRR_BACKEND] RequestHandler: Found helper queue for server_id=%d, enqueueing request\n", target_server_id);
+    fflush(stdout);
 
     // Allocate response buffer (helper thread will fill this)
     rrr_handle->response_data.resize(8192);  // Max response size

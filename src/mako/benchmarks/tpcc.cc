@@ -127,7 +127,7 @@ NumDistrictsPerWarehouse()
 static constexpr inline ALWAYS_INLINE size_t
 NumCustomersPerDistrict()
 {
-  return 3000;
+  return 1000;  // Reduced from 1000 to increase contention on customer records
 }
 
 // T must implement lock()/unlock(). Both must not throw exceptions
@@ -205,10 +205,10 @@ private:
 
 // BenchmarkConfig::getInstance().getConfig()uration flags
 static int g_disable_xpartition_txn = 0;
-static int g_disable_read_only_scans = 0;
+static int g_disable_read_only_scans = 1;
 static int g_enable_partition_locks = 0;
 static int g_enable_separate_tree_per_partition = 0;
-static int g_new_order_remote_item_pct = 1;  // remote ratio for txn_new_order
+static int g_new_order_remote_item_pct = 0;  // 50% per item → low MR ratio for more local transactions
 static int g_new_order_fast_id_gen = 1;
 static int g_uniform_item_dist = 0;
 static int g_order_status_scan_hack = 0;
@@ -223,9 +223,9 @@ static aligned_padded_elem<spinlock> *g_partition_locks = nullptr;
 static aligned_padded_elem<atomic<uint64_t>> *g_district_ids = nullptr;
 
 // BenchmarkConfig::getInstance().getConfig()uration microbenchmark
-static int nkeys = 100 * 10000 ; // 1 million, TODO: it's better for in proportion to scale_factor
-static const size_t g_micro_remote_item_pct = 5;
-static const size_t RMW_count = 4; // the updated keys in a RMW transaction
+static int nkeys = 1000; // 1 million, TODO: it's better for in proportion to scale_factor
+static const size_t g_micro_remote_item_pct = 0;  // 10% MR ratio for micro-benchmarks
+static const size_t RMW_count = 10; // the updated keys in a RMW transaction
 static const bool drtm = false;
 std::string intToString2(long long num) {
     std::ostringstream ss;
@@ -1606,15 +1606,21 @@ tpcc_worker::txn_new_order_simple() {
       int oorder_id = local_oorder_id * 100 + TThread::getPartitionID();
       ids.push_back(oorder_id);
       bool is_remote=false;
+      bool is_mr = (remote_warehouse_id > 0 && 
+                    !WarehouseInShard(remote_warehouse_id, BenchmarkConfig::getInstance().getShardIndex()));
       retry:
       arena.reset();
-      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT, false);
+      void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_DEFAULT);
       try {
         // Tranasction-1
         {
           scoped_str_arena s_arena(arena);
           customer::key k_c(warehouse_id, 1, c_id);
           ALWAYS_ERROR(tbl_customer(warehouse_id)->get(txn, EncodeK(obj_key0, k_c), obj_v));
+          //If is_mr then add delay for testing timeout
+          // if (is_mr) {
+          //   usleep(500*1000); //500ms
+          // }
           if(TThread::transget_without_stable){TThread::transget_without_stable=false;}
           if(TThread::transget_without_throw){TThread::transget_without_throw=false;db->abort_txn_local(txn);return txn_result(false,is_remote?1:0);}
           customer::value v_c_temp;
@@ -1856,6 +1862,9 @@ tpcc_worker::txn_new_order_micro_drtm() {
         first=true;
         ALWAYS_ERROR(remote_tbl_item(remote_warehouse_id)->get(txn, EncodeK(k), obj_v));
         {  // optimistic replication
+          // if (isRemote) {
+          //   usleep(500*1000); //500ms
+          // }
           item_micro::value v_c_temp;
           const item_micro::value *v_c = Decode(obj_v, v_c_temp);
           item_micro::value v_c_new(*v_c);
@@ -1924,6 +1933,9 @@ tpcc_worker::txn_new_order_micro() {
       if (isRemote&&!first) {
         first=true;
         ALWAYS_ERROR(remote_tbl_item(remote_warehouse_id)->get(txn, EncodeK(k), obj_v));
+        // if (isRemote) {
+        //     usleep(500*1000); //500ms
+        //   }
         remote_tbl_item(remote_warehouse_id)->put(txn, Encode(str(), k), Encode(str(), v));
       } else {
         ALWAYS_ERROR(tbl_item(1)->get(txn, EncodeK(k), obj_v));
@@ -1973,6 +1985,9 @@ tpcc_worker::txn_new_order_micro_mega()
       if (isRemote&&!first) {
         first=true;
         ALWAYS_ERROR(remote_tbl_item(remote_warehouse_id)->get(txn, EncodeK(k), obj_v));
+        // if (isRemote) {
+        //     usleep(500*1000); //500ms
+        //   }
         remote_tbl_item(remote_warehouse_id)->put(txn, Encode(str(), k), Encode(str(), v));
       } else {
         for (int i=0; i<batch_size; i++) {
@@ -2057,9 +2072,9 @@ tpcc_worker::txn_new_order_mega()
   //   max_write_set_size : 15
   //   num_txn_contexts : 9
   if (isRemote) {
-    printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order_mega()\n");
+    //printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order_mega()\n");
   }
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER, isRemote);
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;
@@ -2085,6 +2100,9 @@ tpcc_worker::txn_new_order_mega()
     for (int i=0;i<batch_size;i++){
         const customer::key k_c(warehouse_id, districtID, customerID+i>3000?customerID+i-3000:customerID+i);
         ALWAYS_ERROR(tbl_customer(warehouse_id)->get(txn, EncodeK(obj_key0, k_c), obj_v));
+        // if (isRemote) {
+        //     usleep(500*1000); //500ms
+        //   }
         if(TThread::transget_without_stable){TThread::transget_without_stable=false;}
         if(TThread::transget_without_throw){TThread::transget_without_throw=false;db->abort_txn_local(txn);return txn_result(false,isRemote?1:0);}
     }
@@ -2345,9 +2363,9 @@ tpcc_worker::txn_new_order()
   //   max_write_set_size : 15
   //   num_txn_contexts : 9
   if (isRemote) {
-    printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order()\n");
+    //printf("[tpcc] Creating MR transaction (isRemote=true) in txn_new_order()\n");
   }
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER, isRemote);
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_NEW_ORDER);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;
@@ -2371,6 +2389,9 @@ tpcc_worker::txn_new_order()
     ssize_t ret = 0;
     const customer::key k_c(warehouse_id, districtID, customerID);
     ALWAYS_ERROR(tbl_customer(warehouse_id)->get(txn, EncodeK(obj_key0, k_c), obj_v));
+    // if (isRemote) {
+    //         usleep(500*1000); //500ms
+    //       }
     if(TThread::transget_without_stable){TThread::transget_without_stable=false;counter_new_order_failed+=1;}
     if(TThread::transget_without_throw){TThread::transget_without_throw=false;db->abort_txn_local(txn);return txn_result(false,isRemote?1:0);}
     customer::value v_c_temp;
@@ -2826,7 +2847,7 @@ if (TThread::get_is_micro()) {
   bool isRemote = false; // on the remote shard server
   if (likely(g_disable_xpartition_txn ||
              NumWarehousesTotal() == 1 ||
-             RandomNumber(r, 1, 100) <= 85)) {
+             RandomNumber(r, 1, 100) <= 85)) {  // 85% local Payment transactions
     customerDistrictID = districtID;
     customerWarehouseID = WarehouseLocal2Global(warehouse_id);
   } else {
@@ -2898,7 +2919,11 @@ if (TThread::get_is_micro()) {
   //   max_read_set_size : 71
   //   max_write_set_size : 1
   //   num_txn_contexts : 5
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_PAYMENT);
+  if (isRemote) {
+    //printf("[tpcc] Creating MR transaction (isRemote=true) in txn_payment()\n");
+  }
+  //PaymentTxnProfile profile;
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_PAYMENT, isRemote);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;
@@ -2915,6 +2940,9 @@ if (TThread::get_is_micro()) {
 
     const warehouse::key k_w(warehouse_id);
     ALWAYS_ERROR(tbl_warehouse(warehouse_id)->get(txn, Encode(obj_key0, k_w), obj_v));
+    // if (isRemote) {
+    //         usleep(500*1000); //500ms
+    //       }
     if(TThread::transget_without_stable){TThread::transget_without_stable=false;counter_payment_failed+=1;}
     if(TThread::transget_without_throw){TThread::transget_without_throw=false;db->abort_txn_local(txn);return txn_result(false,isRemote?1:0);}
     warehouse::value v_w_temp;
@@ -3420,14 +3448,14 @@ private:
     return false;
 #endif
     return strcmp("customer", name) == 0 || 
-	   //strcmp("district", name) == 0 ||
-	   strcmp("history", name) == 0 ||
-	   strcmp("item", name) == 0 ||
+     //strcmp("district", name) == 0 ||
+     strcmp("history", name) == 0 ||
+     strcmp("item", name) == 0 ||
            strcmp("oorder", name) == 0 ||
-	   strcmp("stock", name) == 0 ||
-	   //strcmp("stock_data", name) == 0 ||
-	   //strcmp("warehouse", name) == 0 ||
-	0;
+     strcmp("stock", name) == 0 ||
+     //strcmp("stock_data", name) == 0 ||
+     //strcmp("warehouse", name) == 0 ||
+  0;
   }
 
   static vector<abstract_ordered_index *>

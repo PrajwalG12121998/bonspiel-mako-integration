@@ -244,30 +244,41 @@ bench_worker::run()
   //    i+30: remote shard commits - nano - Tc
   //    i+35: remote shard aborts - nano - Td
   txn_counts.resize(40);
+  
+  // Initialize latency sample vectors for each transaction type
+  local_commit_latencies_ns.resize(workload.size());
+  local_abort_latencies_ns.resize(workload.size());
+  remote_commit_latencies_ns.resize(workload.size());
+  remote_abort_latencies_ns.resize(workload.size());
+  
   barrier_a->count_down();
   barrier_b->wait_for();
   while (benchConfig.isRunning() && (benchConfig.getRunMode() != RUNMODE_OPS || ntxn_commits < benchConfig.getOpsPerWorker())) {
     double d = r.next_uniform();
     for (size_t i = 0; i < workload.size(); i++) {
       if ((i + 1) == workload.size() || d < workload[i].frequency) {
+        // Start timer BEFORE retry loop to capture end-to-end latency including all retries
+        util::timer t_total(true);  // nano counter for total latency
+        uint64_t accumulated_latency = 0;
       retry:
-        util::timer t(true);  // nano counter
+        util::timer t(true);  // nano counter for this attempt
         const unsigned long old_seed = r.get_seed();
         const auto ret = workload[i].fn(this);
         // if (control_mode==1){
         //   std::cout<<"one transaction2\n";
         // }
         auto tl = t.lap_nano();
+        accumulated_latency += tl;  // Accumulate latency from each attempt
         if (likely(ret.first)) {
           ++ntxn_commits;
           if (ret.second % 10 == 1)
-            latency_numer_us_remote += tl/1000.0;
+            latency_numer_us_remote += accumulated_latency/1000.0;
           else
-            latency_numer_us += tl/1000.0;
+            latency_numer_us += accumulated_latency/1000.0;
           backoff_shifts >>= 1;
         } else {
           ++ntxn_aborts;
-          if (false && benchConfig.getRetryAbortedTransaction() && benchConfig.isRunning()) { // don't retry
+          if (benchConfig.getRetryAbortedTransaction() && benchConfig.isRunning()) { // retry enabled
             if (benchConfig.getBackoffAbortedTransaction()) {
               if (backoff_shifts < 63)
                 backoff_shifts++;
@@ -287,22 +298,26 @@ bench_worker::run()
         if (ret.second % 10 == 1) {  // remote 
           if (ret.first){ // commit
             txn_counts[i+20]++;
-            txn_counts[i+30]+=tl;
+            txn_counts[i+30]+=accumulated_latency;
+            remote_commit_latencies_ns[i].push_back(accumulated_latency);
           } else { // abort
             txn_counts[i+25]++;
-            txn_counts[i+35]+=tl;
+            txn_counts[i+35]+=accumulated_latency;
+            remote_abort_latencies_ns[i].push_back(accumulated_latency);
           }
         } else { // local
           if (ret.first){ // commit
             txn_counts[i]++; // txn_counts aren't used to compute throughput (is
                            // just an informative number to print to the console
                            // in verbose mode)
-            txn_counts[i+10]+=tl;
+            txn_counts[i+10]+=accumulated_latency;
+            local_commit_latencies_ns[i].push_back(accumulated_latency);
           }else { // abort
             txn_counts[i+5]++; // txn_counts aren't used to compute throughput (is
                            // just an informative number to print to the console
                            // in verbose mode)
-            txn_counts[i+15]+=tl;
+            txn_counts[i+15]+=accumulated_latency;
+            local_abort_latencies_ns[i].push_back(accumulated_latency);
           }
         }
         break;
@@ -703,6 +718,112 @@ bench_runner::run()
       cerr << it->first << ": " << it->second << endl;
     cerr << "--- perf counters (if enabled, for benchmark) ---" << endl;
     PERF_EXPR(scopedperf::perfsum_base::printall());
+    
+    // Calculate and print tail latencies (P90, P95, P99, P999)
+    cerr << "--- tail latencies (P90/P95/P99/P999) ---" << endl;
+    string txn_names[] = {"NewOrder", "Payment", "Delivery", "OrderStatus", "StockLevel"};
+    
+    // Get the workload size dynamically from the first worker
+    size_t num_txn_types = workers.empty() ? 0 : workers[0]->get_local_commit_latencies().size();
+    
+    for (size_t txn_idx = 0; txn_idx < num_txn_types && txn_idx < 5; txn_idx++) {
+      // Aggregate latencies from all workers
+      std::vector<uint64_t> all_local_commit, all_local_abort, all_remote_commit, all_remote_abort;
+      for (size_t w = 0; w < workers.size(); w++) {
+        const auto& local_commit = workers[w]->get_local_commit_latencies();
+        const auto& local_abort = workers[w]->get_local_abort_latencies();
+        const auto& remote_commit = workers[w]->get_remote_commit_latencies();
+        const auto& remote_abort = workers[w]->get_remote_abort_latencies();
+        
+        if (txn_idx < local_commit.size())
+          all_local_commit.insert(all_local_commit.end(), local_commit[txn_idx].begin(), local_commit[txn_idx].end());
+        if (txn_idx < local_abort.size())
+          all_local_abort.insert(all_local_abort.end(), local_abort[txn_idx].begin(), local_abort[txn_idx].end());
+        if (txn_idx < remote_commit.size())
+          all_remote_commit.insert(all_remote_commit.end(), remote_commit[txn_idx].begin(), remote_commit[txn_idx].end());
+        if (txn_idx < remote_abort.size())
+          all_remote_abort.insert(all_remote_abort.end(), remote_abort[txn_idx].begin(), remote_abort[txn_idx].end());
+      }
+      
+      cerr << "  " << txn_names[txn_idx] << " samples: local_commit=" << all_local_commit.size() 
+           << " local_abort=" << all_local_abort.size() 
+           << " remote_commit=" << all_remote_commit.size() 
+           << " remote_abort=" << all_remote_abort.size() << endl;
+      
+      // Calculate percentiles for local commits
+      if (!all_local_commit.empty()) {
+        std::sort(all_local_commit.begin(), all_local_commit.end());
+        size_t p90_idx = (size_t)(0.90 * all_local_commit.size());
+        size_t p95_idx = (size_t)(0.95 * all_local_commit.size());
+        size_t p99_idx = (size_t)(0.99 * all_local_commit.size());
+        size_t p999_idx = (size_t)(0.999 * all_local_commit.size());
+        if (p90_idx >= all_local_commit.size()) p90_idx = all_local_commit.size() - 1;
+        if (p95_idx >= all_local_commit.size()) p95_idx = all_local_commit.size() - 1;
+        if (p99_idx >= all_local_commit.size()) p99_idx = all_local_commit.size() - 1;
+        if (p999_idx >= all_local_commit.size()) p999_idx = all_local_commit.size() - 1;
+        
+        cerr << "  " << txn_names[txn_idx] << "_local_commit_p90: " << (all_local_commit[p90_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_commit_p95: " << (all_local_commit[p95_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_commit_p99: " << (all_local_commit[p99_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_commit_p999: " << (all_local_commit[p999_idx] / 1000000.0) << " ms" << endl;
+      }
+      
+      // Calculate percentiles for local aborts
+      if (!all_local_abort.empty()) {
+        std::sort(all_local_abort.begin(), all_local_abort.end());
+        size_t p90_idx = (size_t)(0.90 * all_local_abort.size());
+        size_t p95_idx = (size_t)(0.95 * all_local_abort.size());
+        size_t p99_idx = (size_t)(0.99 * all_local_abort.size());
+        size_t p999_idx = (size_t)(0.999 * all_local_abort.size());
+        if (p90_idx >= all_local_abort.size()) p90_idx = all_local_abort.size() - 1;
+        if (p95_idx >= all_local_abort.size()) p95_idx = all_local_abort.size() - 1;
+        if (p99_idx >= all_local_abort.size()) p99_idx = all_local_abort.size() - 1;
+        if (p999_idx >= all_local_abort.size()) p999_idx = all_local_abort.size() - 1;
+        
+        cerr << "  " << txn_names[txn_idx] << "_local_abort_p90: " << (all_local_abort[p90_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_abort_p95: " << (all_local_abort[p95_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_abort_p99: " << (all_local_abort[p99_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_local_abort_p999: " << (all_local_abort[p999_idx] / 1000000.0) << " ms" << endl;
+      }
+      
+      // Calculate percentiles for remote commits
+      if (!all_remote_commit.empty()) {
+        std::sort(all_remote_commit.begin(), all_remote_commit.end());
+        size_t p90_idx = (size_t)(0.90 * all_remote_commit.size());
+        size_t p95_idx = (size_t)(0.95 * all_remote_commit.size());
+        size_t p99_idx = (size_t)(0.99 * all_remote_commit.size());
+        size_t p999_idx = (size_t)(0.999 * all_remote_commit.size());
+        if (p90_idx >= all_remote_commit.size()) p90_idx = all_remote_commit.size() - 1;
+        if (p95_idx >= all_remote_commit.size()) p95_idx = all_remote_commit.size() - 1;
+        if (p99_idx >= all_remote_commit.size()) p99_idx = all_remote_commit.size() - 1;
+        if (p999_idx >= all_remote_commit.size()) p999_idx = all_remote_commit.size() - 1;
+        
+        cerr << "  " << txn_names[txn_idx] << "_remote_commit_p90: " << (all_remote_commit[p90_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_commit_p95: " << (all_remote_commit[p95_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_commit_p99: " << (all_remote_commit[p99_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_commit_p999: " << (all_remote_commit[p999_idx] / 1000000.0) << " ms" << endl;
+      }
+      
+      // Calculate percentiles for remote aborts
+      if (!all_remote_abort.empty()) {
+        std::sort(all_remote_abort.begin(), all_remote_abort.end());
+        size_t p90_idx = (size_t)(0.90 * all_remote_abort.size());
+        size_t p95_idx = (size_t)(0.95 * all_remote_abort.size());
+        size_t p99_idx = (size_t)(0.99 * all_remote_abort.size());
+        size_t p999_idx = (size_t)(0.999 * all_remote_abort.size());
+        if (p90_idx >= all_remote_abort.size()) p90_idx = all_remote_abort.size() - 1;
+        if (p95_idx >= all_remote_abort.size()) p95_idx = all_remote_abort.size() - 1;
+        if (p99_idx >= all_remote_abort.size()) p99_idx = all_remote_abort.size() - 1;
+        if (p999_idx >= all_remote_abort.size()) p999_idx = all_remote_abort.size() - 1;
+        
+        cerr << "  " << txn_names[txn_idx] << "_remote_abort_p90: " << (all_remote_abort[p90_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_abort_p95: " << (all_remote_abort[p95_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_abort_p99: " << (all_remote_abort[p99_idx] / 1000000.0) << " ms" << endl;
+        cerr << "  " << txn_names[txn_idx] << "_remote_abort_p999: " << (all_remote_abort[p999_idx] / 1000000.0) << " ms" << endl;
+      }
+    }
+    cerr << "---------------------------------------" << endl;
+    
     cerr << "--- allocator stats ---" << endl;
     ::allocator::DumpStats();
     cerr << "---------------------------------------" << endl;

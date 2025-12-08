@@ -58,7 +58,7 @@ class BenchmarkConfig {
           enable_parallel_loading_(0),
           pin_cpus_(1),
           slow_exit_(0),
-          retry_aborted_transaction_(1),
+          retry_aborted_transaction_(0),
           no_reset_counters_(0),
           backoff_aborted_transaction_(0),
           use_hashtable_(0),

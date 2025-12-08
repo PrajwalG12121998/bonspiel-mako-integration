@@ -109,6 +109,8 @@ public:
       bool is_read_only = TThread::txn ? TThread::txn->is_read_only : false;
       int ret=TThread::sclient->remoteGet(mbta.get_table_id(), key, value, is_mr, is_read_only);
       if (ret>0) {
+        printf("[mbta_wrapper::get] remoteGet RPC returned abort for key=%.*s\n",
+               (int)key.length(), key.data());
         throw abstract_db::abstract_abort_exception();
       }
       if (value.length() >= mako::EXTRA_BITS_FOR_VALUE) {
@@ -695,7 +697,7 @@ public:
   void rscan(void *txn,
              const std::string &start_key,
              const std::string *end_key,
-             scan_callback &callback,
+             scan_callback &callback, 
              str_arena *arena = nullptr) {
     NDB_UNIMPLEMENTED("rscan");
   }
@@ -1097,14 +1099,14 @@ public:
   }
 
   void abort_txn(void *txn) {
-    printf("[mbta_wrapper::abort_txn] Called\n");
+    //printf("[mbta_wrapper::abort_txn] Called\n");
     Sto::silent_abort();
     if (TThread::writeset_shard_bits>0||TThread::readset_shard_bits>0)
       TThread::sclient->remoteAbort();
   }
 
   void abort_txn_local(void *txn) {
-    printf("[mbta_wrapper::abort_txn_local] Called\n");
+    //printf("[mbta_wrapper::abort_txn_local] Called\n");
     Sto::silent_abort();
   }
 

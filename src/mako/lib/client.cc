@@ -533,8 +533,8 @@ namespace mako
         uint32_t reqId = ++lastReqId;
         reqId *= 10;
 
-        printf("[Client::InvokeGet] Called - txn_nr: %lu, dstShardIdx: %d, table_id: %d, is_mr: %d, is_read_only: %d\n",
-               txn_nr, dstShardIdx, table_id, is_mr, is_read_only);
+        // printf("[Client::InvokeGet] Called - txn_nr: %lu, dstShardIdx: %d, table_id: %d, is_mr: %d, is_read_only: %d\n",
+            //    txn_nr, dstShardIdx, table_id, is_mr, is_read_only);
         //Warning("invoke InvokeGet,txn_nr:%d,par_id:%d,id:%d",txn_nr,TThread::getPartitionID(),TThread::id());
         Debug("invoke InvokeGet\n");
         crtReqK =
@@ -558,8 +558,8 @@ namespace mako
         reqBuf->len = key.size();
         reqBuf->is_mr = is_mr ? 1 : 0;
         reqBuf->is_read_only = is_read_only ? 1 : 0;
-        printf("[Client::InvokeGet] Request buffer set - req_nr: %u, is_mr in packet: %d, is_read_only in packet: %d\n", 
-               reqBuf->req_nr, reqBuf->is_mr, reqBuf->is_read_only);
+        // printf("[Client::InvokeGet] Request buffer set - req_nr: %u, is_mr in packet: %d, is_read_only in packet: %d\n", 
+            //    reqBuf->req_nr, reqBuf->is_mr, reqBuf->is_read_only);
         ASSERT_LT(key.size(), max_key_length);
 
         memcpy(reqBuf->key, key.c_str(), key.size());
@@ -567,7 +567,7 @@ namespace mako
 
         size_t bytes_used = sizeof(get_request_t) - max_key_length + reqBuf->len;
 
-        printf("[Client::InvokeGet] Sending request to shard %d\n", dstShardIdx);
+        // printf("[Client::InvokeGet] Sending request to shard %d\n", dstShardIdx);
         blocked = true;
         transport->SendRequestToShard(this,
                                       getReqType,

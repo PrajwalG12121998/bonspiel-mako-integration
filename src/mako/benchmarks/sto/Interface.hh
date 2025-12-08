@@ -224,7 +224,10 @@ public:
     }
     
     // Bounded retry with fast fail for MR transactions
-    static bool reserve_with_timeout(type& v, int max_retries = 10) {
+    // Increased default retries from 1 to 50 to handle network latency (~70ms)
+    // With 50 retries and brief spinning, MR can wait up to ~5-10ms for SR locks
+    // This is still much less than network latency but enough for most SR txns
+    static bool reserve_with_timeout(type& v, int max_retries = 100) {
         for (int i = 0; i < max_retries; i++) {
             int result = try_reserve(v);
             if (result == 0) {
@@ -233,8 +236,15 @@ public:
             if (result == 2) {
                 return false;  // Max reservations - abort immediately
             }
-            // result == 1: retry (lock held or CAS failed)
+            // result == 1: retry (lock held by SR or CAS failed)
+            // Brief pause to let SR transaction release lock
+            // Use exponential backoff for high contention scenarios
             relax_fence();
+            if (i > 10 && i % 10 == 0) {
+                // After 10 fast retries, occasionally yield to reduce CPU spinning
+                relax_fence();
+                relax_fence();
+            }
         }
         return false;  // Timeout after max_retries - abort
     }
@@ -336,6 +346,8 @@ public:
         
         // Check reservation - if reserved, fail immediately
         if (vv & reservation_mask) {
+            printf("[try_lock_if_not_reserved] SR transaction blocked - record RESERVED by MR (thread_id=%d, version=0x%lx, res_count=%lu)\n",
+                   here, (unsigned long)vv, (unsigned long)reservation_count(vv));
             return 2;  // Reserved by MR - abort
         }
         

@@ -180,6 +180,10 @@ main(int argc, char **argv)
     }
   }
 
+  // Enable retry logic for aborted transactions
+  //benchConfig.setRetryAbortedTransaction(1);
+  //benchConfig.setBackoffAbortedTransaction(1);
+
   init_env();
 
   // Check if running in multi-shard mode

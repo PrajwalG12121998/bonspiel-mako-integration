@@ -240,7 +240,7 @@ namespace mako
     // simple get function
     int ShardClient::remoteGet(int remote_table_id, std::string key, std::string &value, bool is_mr, bool is_read_only)
     {
-        printf("[ShardClient::remoteGet] called for key: %.*s\n", (int)key.length(), key.data());
+        // printf("[ShardClient::remoteGet] called for key: %.*s\n", (int)key.length(), key.data());
         int table_id = remote_table_id;
         int dstShardIndex = (remote_table_id - 1) / mako::NUM_TABLES_PER_SHARD;
 
@@ -330,7 +330,7 @@ namespace mako
         Promise promise(BASIC_TIMEOUT);
         waiting = &promise;
 
-        printf("[ShardClient::remoteBatchLock] is_mr: %d, num_shards: %zu\n", is_mr, request_batch_per_shard.size());
+        // printf("[ShardClient::remoteBatchLock] is_mr: %d, num_shards: %zu\n", is_mr, request_batch_per_shard.size());
 
         const int timeout = promise.GetTimeout();
         calculate_num_response_waiting(shards_to_send_bits);

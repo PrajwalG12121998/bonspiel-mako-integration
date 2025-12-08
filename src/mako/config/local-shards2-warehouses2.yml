@@ -4,44 +4,18 @@
 # https://aju9mlkupe.feishu.cn/docs/doccnG7AZ1gjFmo9CcgRMidJO5f Port allocation policy
 
 shards: 2  # number of shards
-replicas: 3  # number of replicas
+replicas: 0 # number of replicas
 warehouses: 2  # number of warehouses per shard, keep same as the tpcc worker threads
 localhost:
   - name: shard0
     index: 0
     ip:   127.0.0.1
-    port: 31000
+    port: 8000
   - name: shard1
     index: 1
     ip:   127.0.0.1
-    port: 31100
-p1:
-  - name: shard0
-    index: 0
-    ip:  127.0.0.1
-    port: 32000
-  - name: shard1
-    index: 1
-    ip: 127.0.0.1
-    port: 32100
-p2:
-  - name: shard0
-    index: 0
-    ip:  127.0.0.1
-    port: 33000
-  - name: shard1
-    index: 1
-    ip:  127.0.0.1
-    port: 33100
-learner:
- - name: shard0
-   index: 0
-   ip:  127.0.0.1
-   port: 34000
- - name: shard1
-   index: 1
-   ip:  127.0.0.1
-   port: 34100
+    port: 8000
+
 memlocalhost: 6001 # mem control port
 memlearner: 6001
 memp1: 6002

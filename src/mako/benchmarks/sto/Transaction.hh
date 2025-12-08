@@ -665,13 +665,23 @@ private:
 
 public:
     void silent_abort() {
-        printf("[Transaction::silent_abort] Called - is_mr=%d, in_progress=%d\n", is_mr, in_progress());
+        if (is_mr) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+            printf("[%06ld] [MR_SILENT_ABORT] thread_id=%d, state=%s\n", 
+                   now_ms, TThread::id(), state_name(state_));
+        }
         if (in_progress())
             stop(false, nullptr, 0);
     }
 
     void abort() {
-        printf("[Transaction::abort] Called - is_mr=%d\n", is_mr);
+        if (is_mr) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+            printf("[%06ld] [MR_ABORT_THROW] thread_id=%d, state=%s\n", 
+                   now_ms, TThread::id(), state_name(state_));
+        }
         silent_abort();
         throw Abort();
     }
@@ -978,7 +988,12 @@ public:
     }
 
     static void abort_without_throw() {
-        printf("[Sto::abort_without_throw] Called\n");
+        if (in_progress() && TThread::txn && TThread::txn->is_mr) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+            printf("[%06ld] [MR_ABORT_WITHOUT_THROW] thread_id=%d\n", 
+                   now_ms, TThread::id());
+        }
         Sto::silent_abort();
         if (TThread::writeset_shard_bits>0||TThread::readset_shard_bits>0)
             TThread::sclient->remoteAbort(); 

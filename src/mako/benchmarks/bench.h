@@ -147,6 +147,12 @@ public:
 
   std::map<std::string, size_t> get_txn_counts() const;
 
+  // Get latency samples for tail latency calculation
+  inline const std::vector<std::vector<uint64_t>>& get_local_commit_latencies() const { return local_commit_latencies_ns; }
+  inline const std::vector<std::vector<uint64_t>>& get_local_abort_latencies() const { return local_abort_latencies_ns; }
+  inline const std::vector<std::vector<uint64_t>>& get_remote_commit_latencies() const { return remote_commit_latencies_ns; }
+  inline const std::vector<std::vector<uint64_t>>& get_remote_abort_latencies() const { return remote_abort_latencies_ns; }
+
   void print_stats() const;
 
   typedef abstract_db::counter_map counter_map;
@@ -194,6 +200,12 @@ protected:
 
   std::vector<size_t> txn_counts; // breakdown of txns
   std::vector<size_t> sampling_remote_calls; // Debugging: the invoke time for remote calls
+
+  // Latency samples for tail latency calculation (vector of vectors, one per txn type)
+  std::vector<std::vector<uint64_t>> local_commit_latencies_ns;
+  std::vector<std::vector<uint64_t>> local_abort_latencies_ns;
+  std::vector<std::vector<uint64_t>> remote_commit_latencies_ns;
+  std::vector<std::vector<uint64_t>> remote_abort_latencies_ns;
 
   ssize_t size_delta; // how many logical bytes (of values) did the worker add to the DB
 

@@ -56,13 +56,13 @@ namespace mako
 
     // Message handlers.
     size_t ShardReceiver::ReceiveRequest(uint8_t reqType, char *reqBuf, char *respBuf)
-    {   printf("[ShardReceiver::ReceiveRequest] requestType received: %d\n", reqType);
+    {   //printf("[ShardReceiver::ReceiveRequest] requestType received: %d\n", reqType);
         Debug("server deal with reqType: %d", reqType);
         size_t respLen;
         switch (reqType)
         {
         case getReqType:
-            printf("HandleGetRequest called\n");
+            // printf("HandleGetRequest called\n");
             HandleGetRequest(reqBuf, respBuf, respLen);
             break;
         case scanReqType:
@@ -318,7 +318,7 @@ namespace mako
             TThread::txn->is_mr = req->is_mr;
         }
         // print mr status
-        printf("[ShardReceiver::HandleBatchLockRequest] is_mr: %d\n", req->is_mr);
+        //printf("[ShardReceiver::HandleBatchLockRequest] is_mr: %d\n", req->is_mr);
 
         uint16_t table_id, klen, vlen;
         char *k_ptr, *v_ptr;
@@ -541,6 +541,7 @@ namespace mako
             // Check if table exists (may not exist in micro benchmark mode)
             auto it = open_tables_table_id.find(req->table_id);
             if (it == open_tables_table_id.end() || it->second == nullptr) {
+                printf("Table ID %d not found, aborting transaction\n", req->table_id);
                 db->shard_abort_txn(nullptr);
                 status = ErrorCode::ABORT;
             } else {
@@ -555,10 +556,12 @@ namespace mako
                     // abort here,
                     //  "not found a key" maybe a expected behavior
                     if (!ret){ // key not found or found but invalid
+                        printf("Key not found, aborting transaction\n");
                         db->shard_abort_txn(nullptr);
                         status = ErrorCode::ABORT;
                     }
                 } catch (abstract_db::abstract_abort_exception &ex) {
+                    printf("Exception caught during shard_get, aborting transaction\n");
                     // No need to abort, the client side will issue an abort
                     db->shard_abort_txn(nullptr);
                     status = ErrorCode::ABORT;

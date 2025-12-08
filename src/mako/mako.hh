@@ -503,11 +503,11 @@ static void run_latency_tracking()
         if (latencyVector.size() > 0) {
             std::cout << "averaged latency: " << latency_ts / valid_cnt << std::endl;
             std::sort (latencyVector.begin(), latencyVector.end());
-            std::cout << "10% latency: " << latencyVector[(int)(valid_cnt *0.1)]  << std::endl;
-            std::cout << "50% latency: " << latencyVector[(int)(valid_cnt *0.5)]  << std::endl;
-            std::cout << "90% latency: " << latencyVector[(int)(valid_cnt *0.9)]  << std::endl;
-            std::cout << "95% latency: " << latencyVector[(int)(valid_cnt *0.95)]  << std::endl;
-            std::cout << "99% latency: " << latencyVector[(int)(valid_cnt *0.99)]  << std::endl;
+            std::cout << "10% latency: " << latencyVector[std::min((size_t)std::ceil(0.1 * latencyVector.size()), latencyVector.size()) - 1]  << std::endl;
+            std::cout << "50% latency: " << latencyVector[std::min((size_t)std::ceil(0.5 * latencyVector.size()), latencyVector.size()) - 1]  << std::endl;
+            std::cout << "90% latency: " << latencyVector[std::min((size_t)std::ceil(0.9 * latencyVector.size()), latencyVector.size()) - 1]  << std::endl;
+            std::cout << "95% latency: " << latencyVector[std::min((size_t)std::ceil(0.95 * latencyVector.size()), latencyVector.size()) - 1]  << std::endl;
+            std::cout << "99% latency: " << latencyVector[std::min((size_t)std::ceil(0.99 * latencyVector.size()), latencyVector.size()) - 1]  << std::endl;
         }
   }
 #endif
