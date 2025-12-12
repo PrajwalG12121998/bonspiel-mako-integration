@@ -249,6 +249,12 @@ public:
         return false;  // Timeout after max_retries - abort
     }
 
+    static void reserve(type& v) {
+        type old_v = v;
+        assert((old_v & reservation_mask) < reservation_mask);
+        __sync_fetch_and_add(&v, reservation_inc);
+    }
+
     static void unreserve(type& v) {
         type old_v = v;
         assert((old_v & reservation_mask) >= reservation_inc);

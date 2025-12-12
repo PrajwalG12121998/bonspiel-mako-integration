@@ -1250,3 +1250,28 @@ std::ostream &operator<<(std::ostream &w, const TransactionGuard &txn)
     txn.print(w);
     return w;
 }
+
+
+
+/*
+
+
+mr1 read - a - v1 (counter - 1)
+mr1 writes - b
+mr2 read - a - v1 (counter - 2)
+mr2 writes - c
+
+
+
+mr2 commit
+unreserve a - v1 (counter - 1)
+
+sr1 - writes - a -- abort
+
+// acquire lock bit for a
+// before acquring lock bit, check reservation bit of a
+
+
+-- goal is sr should not modify the reads of any mr transaction
+
+*/

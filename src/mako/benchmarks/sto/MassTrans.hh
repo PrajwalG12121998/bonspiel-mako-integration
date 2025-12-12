@@ -969,21 +969,24 @@ protected:
     do {
       v2 = e->version();
       if (is_locked(v2)){
-        if (TThread::txn && TThread::txn->is_mr) {
-          auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-          printf("[%06ld] [MR_ABORT_READ_LOCKED] thread_id=%d - atomicRead found locked version\n",
-                 now_ms, TThread::id());
-        }
-        if (TThread::txn && TThread::txn->is_mr == false) {
-          auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-          printf("[%06ld] [SR_ABORT_READ_LOCKED] thread_id=%d - atomicRead found locked version\n",
-                 now_ms, TThread::id());
-        }
+        // if (TThread::txn && TThread::txn->is_mr) {
+        //   auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        //       std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+        //   printf("[%06ld] [MR_ABORT_READ_LOCKED] thread_id=%d - atomicRead found locked version\n",
+        //          now_ms, TThread::id());
+        // }
+        // if (TThread::txn && TThread::txn->is_mr == false) {
+        //   auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        //       std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+        //   printf("[%06ld] [SR_ABORT_READ_LOCKED] thread_id=%d - atomicRead found locked version\n",
+        //          now_ms, TThread::id());
+        // }
         Sto::abort_without_throw(); //Sto::abort();
         TThread::transget_without_throw=true;
         return false;
+      } else {
+        // reserve(v2)
+        // sync_fetch_and_add(&v2, reservation_inc);
       }
 	
       fence();
@@ -998,47 +1001,76 @@ protected:
   // Atomic read with reservation for MR transactions
   // This reserves the key, reads the value, and adds to readset atomically
   // Returns false if reservation fails
-  static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item, Str key) {
-    // Check if this transaction already reserved this key (avoid double-reservation)
-    if (!item.has_flag(TransItem::reserved_bit)) {
-      // First, reserve the key with bounded wait (timeout prevents infinite spinning)
-      // printf("[MassTrans::atomicReadWithReserve] Attempting to reserve key=%.*s. Current version: 0x%lx, reservation_count: %lu\n",
-            //  (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
-      bool reserved = TransactionTid::reserve_with_timeout(e->version());
-      //printf("[MassTrans::atomicReadWithReserve] reserve_with_timeout returned: %d, key=%.*s, new version: 0x%lx, reservation_count: %lu\n",
-      //       reserved, (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
-      
-      if (!reserved) {
-        // Reservation failed (max reservations reached or timeout)
-        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-        printf("[%06ld] [MR_ABORT_RESERVATION_FAILED] thread_id=%d, key=%.*s - reservation failed after retries\n",
-               now_ms, TThread::id(), (int)key.length(), key.data());
-        Sto::abort_without_throw();
-        TThread::transget_without_throw = true;
-        return false;
-      }
-      
-      // Reservation succeeded - mark this TransItem as having reserved
-      item.add_flags(TransItem::reserved_bit);
-    } else {
-      //printf("[MassTrans::atomicReadWithReserve] Key already reserved by this txn, skipping reserve. key=%.*s\n",
-      //       (int)key.length(), key.data());
-    }
+  // static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item, Str key) {
+
     
-    // Do a consistent read (version check loop for memory visibility)
+  //   // Check if this transaction already reserved this key (avoid double-reservation)
+  //   if (!item.has_flag(TransItem::reserved_bit)) {
+  //     // First, reserve the key with bounded wait (timeout prevents infinite spinning)
+  //     // printf("[MassTrans::atomicReadWithReserve] Attempting to reserve key=%.*s. Current version: 0x%lx, reservation_count: %lu\n",
+  //           //  (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
+  //     bool reserved = TransactionTid::reserve_with_timeout(e->version());
+  //     //printf("[MassTrans::atomicReadWithReserve] reserve_with_timeout returned: %d, key=%.*s, new version: 0x%lx, reservation_count: %lu\n",
+  //     //       reserved, (int)key.length(), key.data(), (unsigned long)e->version(), (unsigned long)TransactionTid::reservation_count(e->version()));
+      
+  //     if (!reserved) {
+  //       // // Reservation failed (max reservations reached or timeout)
+  //       // auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+  //       //     std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
+  //       // printf("[%06ld] [MR_ABORT_RESERVATION_FAILED] thread_id=%d, key=%.*s - reservation failed after retries\n",
+  //       //        now_ms, TThread::id(), (int)key.length(), key.data());
+  //       Sto::abort_without_throw();
+  //       TThread::transget_without_throw = true;
+  //       return false;
+  //     }
+      
+  //     // Reservation succeeded - mark this TransItem as having reserved
+  //     item.add_flags(TransItem::reserved_bit);
+  //   } else {
+  //     //printf("[MassTrans::atomicReadWithReserve] Key already reserved by this txn, skipping reserve. key=%.*s\n",
+  //     //       (int)key.length(), key.data());
+  //   }
+    
+  //   // Do a consistent read (version check loop for memory visibility)
+  //   Version v2;
+  //   do {
+  //     v2 = e->version();
+  //     fence();
+  //     assign_val(val, e->read_value());
+  //     fence();
+  //     vers = e->version();
+  //     fence();
+  //   } while (vers != v2);
+    
+  //   //printf("[MassTrans::atomicReadWithReserve] Read succeeded, vers: 0x%lx\n", (unsigned long)vers);
+  //   return true;
+  // }
+
+  static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
     Version v2;
     do {
       v2 = e->version();
+      if (is_locked(v2)){
+        Sto::abort_without_throw(); //Sto::abort();
+        TThread::transget_without_throw=true;
+        return false;
+    }
       fence();
       assign_val(val, e->read_value());
       fence();
       vers = e->version();
       fence();
-    } while (vers != v2);
+      if(vers == v2) {
+        if(!item.has_flag(TransItem::reserved_bit)) {
+          TransactionTid::reserve(v2);
     
-    //printf("[MassTrans::atomicReadWithReserve] Read succeeded, vers: 0x%lx\n", (unsigned long)vers);
-    return true;
+          item.add_flags(TransItem::reserved_bit);
+          return true;
+      }
+  }while (vers != v2);
+    
+  return true;
+
   }
 
   template <typename ValType>
