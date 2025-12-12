@@ -176,7 +176,7 @@ public:
         //printf("[MassTrans::transGet] MR transaction detected - calling atomicReadWithReserve for key=%.*s\n",
         //       (int)key.length(), key.data());
         
-        if(!atomicReadWithReserve(e, elem_vers, retval, item, key)) {
+        if(!atomicReadWithReserve(e, elem_vers, retval, item)) {
           //printf("[MassTrans::transGet] atomicReadWithReserve failed for key=%.*s\n",
           //       (int)key.length(), key.data());
           return false;
@@ -830,24 +830,10 @@ protected:
       bool is_read_only = TThread::txn ? TThread::txn->is_read_only : false;
       Version v;
       
-      if (is_mr && !is_read_only) {
-        // printf("[MassTrans::handlePutFound] MR transaction - using atomicReadWithReserve for PUT, key=%.*s\n",
-        //        (int)key.length(), key.data());
-        // Use atomicReadWithReserve to reserve + read for MR transactions
-        value_type dummy_val;
-        if (!atomicReadWithReserve(e, v, dummy_val, item, key)) {
-          // printf("[MassTrans::handlePutFound] atomicReadWithReserve failed, aborting\n");
-          return false;  // Reservation failed, abort
-        }
-      } else {
-        // For SR transactions, do regular version read
+    
+  
         v = e->version();
         fence();
-        // printf("[MassTrans::handlePutFound] SR transaction - reading version for PUT operation, key=%.*s, version=0x%lx\n",
-        //        (int)key.length(), key.data(), (unsigned long)v);
-      }
-      
-      // Add the version to readset (for both SR and MR)
       item.observe(tversion_type(v));
     }
     if (SET) {
