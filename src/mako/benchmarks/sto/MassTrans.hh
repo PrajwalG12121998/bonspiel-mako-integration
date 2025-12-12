@@ -573,16 +573,16 @@ public:
   }
   void unreserve(versioned_value *e) {
     unsigned long count_current = (unsigned long)TransactionTid::reservation_count(e->version());
-    // printf("[MassTrans::unreserve(vv)] Called. Current version: 0x%lx, reservation_count: %lu, is_reserved: %d\n",
-          //  (unsigned long)e->version(), count_current, TransactionTid::is_reserved(e->version()));
+    printf("[MassTrans::unreserve(vv)] Called. Current version: 0x%lx, reservation_count: %lu, is_reserved: %d\n",
+           (unsigned long)e->version(), count_current, TransactionTid::is_reserved(e->version()));
     // Only unreserve if actually reserved (count > 0)
     if (TransactionTid::is_reserved(e->version())) {
       unsigned long count_before = (unsigned long)TransactionTid::reservation_count(e->version());
       TransactionTid::unreserve(e->version());
       unsigned long count_after = (unsigned long)TransactionTid::reservation_count(e->version());
-      //printf("[MassTrans::unreserve(vv)] Unreserved: count %lu -> %lu\n", count_before, count_after);
+      printf("[MassTrans::unreserve(vv)] Unreserved: count %lu -> %lu\n", count_before, count_after);
     } else {
-      //printf("[MassTrans::unreserve(vv)] SKIPPED - not reserved (count=0)\n");
+      printf("[MassTrans::unreserve(vv)] SKIPPED - not reserved (count=0)\n");
     }
   }
   bool is_reserved(versioned_value *e) {
@@ -824,16 +824,10 @@ protected:
     if (!item.has_read() && !has_insert(item))
 #endif
     {
-      // For MR transactions, we need to reserve before reading the version
-      // to prevent concurrent SR transactions from modifying the record
-      bool is_mr = TThread::txn ? TThread::txn->is_mr : false;
-      bool is_read_only = TThread::txn ? TThread::txn->is_read_only : false;
-      Version v;
-      
-    
-  
-        v = e->version();
-        fence();
+      // XXX: I'm pretty sure there's a race here-- we should grab this
+      // version before we check if the node is valid
+      Version v = e->version();
+      fence();
       item.observe(tversion_type(v));
     }
     if (SET) {
@@ -1033,30 +1027,40 @@ protected:
   // }
 
   static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
-    Version v2;
-    do {
-      v2 = e->version();
-      if (is_locked(v2)){
-        Sto::abort_without_throw(); //Sto::abort();
-        TThread::transget_without_throw=true;
+    while (true) {
+      Version v_before = e->version();
+      if (is_locked(v_before)) {
+        Sto::abort_without_throw();
+        TThread::transget_without_throw = true;
         return false;
-    }
+      }
+      // Only reserve if not already reserved by this transaction
+      if (!item.has_flag(TransItem::reserved_bit)) {
+        // Try to reserve with timeout (to avoid spinning forever)
+        TransactionTid::reserve(e->version());
+        item.add_flags(TransItem::reserved_bit);
+      }
       fence();
       assign_val(val, e->read_value());
       fence();
-      vers = e->version();
+      Version v_after = e->version();
       fence();
-      if(vers == v2) {
-        if(!item.has_flag(TransItem::reserved_bit)) {
-          TransactionTid::reserve(v2);
-    
-          item.add_flags(TransItem::reserved_bit);
-          return true;
+      // Check that only the reservation bits may have changed
+      Version mask = ~(TransactionTid::reservation_mask);
+      if ((v_after & mask) == (v_before & mask)) {
+        vers = v_after;
+        return true;
+      } else {
+        // Version changed (not just reservation bits): unreserve and retry
+        if (item.has_flag(TransItem::reserved_bit)) {
+          TransactionTid::unreserve(e->version());
+          item.remove_reserve();
+        }
+        // retry
       }
     }
-    }while (vers != v2);
-    
-  return true;
+    // unreachable
+    return false;
   }
   
 

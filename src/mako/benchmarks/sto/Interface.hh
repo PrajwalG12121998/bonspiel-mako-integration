@@ -249,10 +249,12 @@ public:
         return false;  // Timeout after max_retries - abort
     }
 
-    static void reserve(type& v) {
+    static type reserve(type& v) {
         type old_v = v;
         assert((old_v & reservation_mask) < reservation_mask);
-        __sync_fetch_and_add(&v, reservation_inc);
+        printf("[TransactionTid::reserve] Reserving. Old version: 0x%lx, reservation_count: %lu\n",
+               (unsigned long)old_v, (unsigned long)reservation_count(old_v));
+        return __sync_fetch_and_add(&v, reservation_inc);
     }
 
     static void unreserve(type& v) {
@@ -349,7 +351,8 @@ public:
     // Returns: 0 = success, 1 = lock contention/retry, 2 = reserved by MR
     static int try_lock_if_not_reserved(type& v, int here) {
         type vv = v;
-        
+        printf("[try_lock_if_not_reserved] thread_id=%d attempting lock_if_not_reserved on version 0x%lx (res_count=%lu)\n",
+               here, (unsigned long)vv, (unsigned long)reservation_count(vv)); 
         // Check reservation - if reserved, fail immediately
         if (vv & reservation_mask) {
             printf("[try_lock_if_not_reserved] SR transaction blocked - record RESERVED by MR (thread_id=%d, version=0x%lx, res_count=%lu)\n",

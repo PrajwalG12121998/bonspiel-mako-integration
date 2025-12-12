@@ -7,107 +7,61 @@
 #include <thread>
 #include <vector>
 #include <map>
-#include <algorithm>
-#include <numeric>
-#include <mutex>
 #include <mako.hh>
 #include "examples/common.h"
 #include "examples/test_verification.h"
 #include "benchmarks/rpc_setup.h"
 #include "../src/mako/spinbarrier.h"
 #include "../src/mako/benchmarks/mbta_sharded_ordered_index.hh"
-#include "../src/mako/benchmarks/sto/Transaction.hh"
 
 using namespace std;
 using namespace mako;
 
-// Latency tracker with statistics
-struct LatencyTracker {
-    std::vector<double> latencies_us;
-    std::mutex mutex;
-    
-    void add(double latency_us) {
-        std::lock_guard<std::mutex> lock(mutex);
-        latencies_us.push_back(latency_us);
-    }
-    
-    void print_stats(const std::string& label) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (latencies_us.empty()) {
-            printf("[%s] No data\n", label.c_str());
-            return;
-        }
-        
-        std::sort(latencies_us.begin(), latencies_us.end());
-        double sum = std::accumulate(latencies_us.begin(), latencies_us.end(), 0.0);
-        double mean = sum / latencies_us.size();
-        double median = latencies_us[latencies_us.size() / 2];
-        double p50 = latencies_us[(int)(latencies_us.size() * 0.50)];
-        double p90 = latencies_us[(int)(latencies_us.size() * 0.90)];
-        double p95 = latencies_us[(int)(latencies_us.size() * 0.95)];
-        double p99 = latencies_us[(int)(latencies_us.size() * 0.99)];
-        double min = latencies_us[0];
-        double max = latencies_us[latencies_us.size() - 1];
-        
-        printf("\n========================================\n");
-        printf("[%s] LATENCY STATISTICS\n", label.c_str());
-        printf("========================================\n");
-        printf("Total transactions: %zu\n", latencies_us.size());
-        printf("Mean:   %.3f us (%.3f ms)\n", mean, mean / 1000.0);
-        printf("Median: %.3f us (%.3f ms)\n", median, median / 1000.0);
-        printf("Min:    %.3f us (%.3f ms)\n", min, min / 1000.0);
-        printf("Max:    %.3f us (%.3f ms)\n", max, max / 1000.0);
-        printf("P50:    %.3f us (%.3f ms)\n", p50, p50 / 1000.0);
-        printf("P90:    %.3f us (%.3f ms)\n", p90, p90 / 1000.0);
-        printf("P95:    %.3f us (%.3f ms)\n", p95, p95 / 1000.0);
-        printf("P99:    %.3f us (%.3f ms)\n", p99, p99 / 1000.0);
-        printf("========================================\n\n");
-    }
-};
-
-// Global latency trackers
-LatencyTracker g_mr_latencies;
-LatencyTracker g_sr_latencies;
-
-class TransactionWorker {
+class TransactionWorker
+{
 public:
     TransactionWorker(abstract_db *db, int worker_id = 0)
-        : db(db), worker_id_(worker_id), original_worker_id_(worker_id) {
+        : db(db), worker_id_(worker_id), original_worker_id_(worker_id)
+    {
         txn_obj_buf.reserve(str_arena::MinStrReserveLength);
         txn_obj_buf.resize(db->sizeof_txn_object(0));
     }
 
-    void initialize() {
+    void initialize()
+    {
         scoped_db_thread_ctx ctx(db, false);
     }
 
-    void test_basic_transactions() {
+    void test_basic_transactions()
+    {
         printf("\n--- Testing Basic Transactions Thread:%ld ---\n", std::this_thread::get_id());
 
-        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex() ;
-        if(home_shard_index != 0) {
-            return;
-        }
-        worker_id_ = worker_id_ * 100 + home_shard_index ;
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        worker_id_ = worker_id_ * 100 + home_shard_index;
         mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
-        
+
         // Write 5 keys - unique per worker to avoid contention
-        for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+        for (size_t i = 0; i < 5; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = mako::Encode("test_value_w" + std::to_string(worker_id_) + "_" + std::to_string(i));
-            try {
+            try
+            {
                 table->put(txn, key, value);
 
-                if (BenchmarkConfig::getInstance().getNshards()==2) {
-                    int remote_shard = home_shard_index==0?1:0;
+                if (BenchmarkConfig::getInstance().getNshards() == 2)
+                {
+                    int remote_shard = home_shard_index == 0 ? 1 : 0;
                     std::string key2 = "test_key2_w" + std::to_string(worker_id_) + "_" + std::to_string(i) + "_remote";
                     std::string value2 = mako::Encode("test_value2_w" + std::to_string(worker_id_) + "_" + std::to_string(i));
                     table->put(txn, key2, value2);
                 }
 
                 db->commit_txn(txn);
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 printf("Write aborted: %s\n", key.c_str());
                 db->abort_txn(txn);
             }
@@ -116,20 +70,25 @@ public:
 
         // Read and verify 5 keys
         bool all_reads_ok = true;
-        for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false/*is_read_only*/);
+        for (size_t i = 0; i < 5; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string key = "test_key_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
             std::string value = "";
-            try {
+            try
+            {
                 table->get(txn, key, value);
                 db->commit_txn(txn);
-                
+
                 std::string expected = "test_value_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
-                if (value.substr(0, expected.length()) != expected) {
+                if (value.substr(0, expected.length()) != expected)
+                {
                     all_reads_ok = false;
                     break;
                 }
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 printf("Read aborted: %s\n", key.c_str());
                 db->abort_txn(txn);
                 all_reads_ok = false;
@@ -138,25 +97,30 @@ public:
         }
         VERIFY(all_reads_ok, "Read and verify 5 records");
 
-        if (BenchmarkConfig::getInstance().getNshards()==2) {
+        if (BenchmarkConfig::getInstance().getNshards() == 2)
+        {
             // Read and verify 5 keys
             bool all_reads_ok = true;
-            for (size_t i = 0; i < 5; i++) {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-                int remote_shard = home_shard_index==0?1:0;
+            for (size_t i = 0; i < 5; i++)
+            {
+                void *txn = db->new_txn(0, arena, txn_buf());
+                int remote_shard = home_shard_index == 0 ? 1 : 0;
                 std::string key = "test_key2_w" + std::to_string(worker_id_) + "_" + std::to_string(i) + "_remote";
                 std::string value = "";
-                try {
+                try
+                {
                     table->get(txn, key, value);
-                    table->put(txn, key, value); // read twice to test reservation
                     db->commit_txn(txn);
-                    
+
                     std::string expected = "test_value2_w" + std::to_string(worker_id_) + "_" + std::to_string(i);
-                    if (value.substr(0, expected.length()) != expected) {
+                    if (value.substr(0, expected.length()) != expected)
+                    {
                         all_reads_ok = false;
                         break;
                     }
-                } catch (abstract_db::abstract_abort_exception &ex) {
+                }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
                     printf("Read aborted: %s\n", key.c_str());
                     db->abort_txn(txn);
                     all_reads_ok = false;
@@ -166,10 +130,11 @@ public:
             VERIFY(all_reads_ok, "Read and verify 5 records on remote shards");
         }
 
-        std::cout<<"Worker completed" << std::endl;
+        std::cout << "Worker completed" << std::endl;
     }
 
-    void test_single_key_contention() {
+    void test_single_key_contention()
+    {
         printf("\n[TEST_SINGLE_KEY] === Testing Single Key Contention Thread:%ld ===\n", std::this_thread::get_id());
 
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
@@ -179,18 +144,19 @@ public:
         std::string shared_key = "contention_key_shared";
 
         int commits = 0, aborts = 0;
-        for (size_t i = 0; i < 10; i++) {
-            // Randomly decide SR or MR transaction (30% MR, 70% SR)
-            bool is_mr = (rand() % 100) < 30;
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);  // Use is_mr variable!
-            printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu is_mr=%d\n", home_shard_index, worker_id_, i, is_mr);
+        for (size_t i = 0; i < 10; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
-            try {
+            try
+            {
                 table->put(txn, shared_key, value);
                 db->commit_txn(txn);
                 commits++;
                 printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu COMMITTED\n", home_shard_index, worker_id_, i);
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 aborts++;
                 printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] txn %zu ABORTED\n", home_shard_index, worker_id_, i);
@@ -201,22 +167,29 @@ public:
                home_shard_index, worker_id_, commits, aborts);
 
         // Only worker 0 verifies final state after all workers finish
-        if (original_worker_id_ == 0) {
+        if (original_worker_id_ == 0)
+        {
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
-            void *txn = db->new_txn(0, arena,  txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string value;
-            try {
+            try
+            {
                 bool exists = table->get(txn, shared_key, value);
                 db->commit_txn(txn);
-                if (exists) {
+                if (exists)
+                {
                     printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] Final read: key '%s' EXISTS with value: %s\n",
                            home_shard_index, worker_id_, shared_key.c_str(), value.substr(0, 50).c_str());
-                } else {
+                }
+                else
+                {
                     printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] Final read: key '%s' DOES NOT EXIST\n",
                            home_shard_index, worker_id_, shared_key.c_str());
                 }
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 printf("[TEST_SINGLE_KEY] [Shard %d Worker %d] Final read ABORTED\n",
                        home_shard_index, worker_id_);
@@ -224,7 +197,8 @@ public:
         }
     }
 
-    void test_overlapping_keys() {
+    void test_overlapping_keys()
+    {
         printf("\n[TEST_OVERLAP_KEYS] === Testing Overlapping Keys Thread:%ld ===\n", std::this_thread::get_id());
 
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
@@ -235,19 +209,22 @@ public:
         int key_group = (worker_id_ / 2) * 5;
 
         int commits = 0, aborts = 0;
-        for (size_t i = 0; i < 10; i++) {
-
-                    void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+        for (size_t i = 0; i < 10; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             // Access keys in the shared range for this group
             std::string key = "overlap_key_" + std::to_string(key_group + (i % 5));
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
-            try {
+            try
+            {
                 table->put(txn, key, value);
                 db->commit_txn(txn);
                 commits++;
                 printf("[TEST_OVERLAP_KEYS] [Shard %d Worker %d] key=%s txn %zu COMMITTED\n",
                        home_shard_index, worker_id_, key.c_str(), i);
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 aborts++;
                 printf("[TEST_OVERLAP_KEYS] [Shard %d Worker %d] key=%s txn %zu ABORTED\n",
@@ -259,23 +236,30 @@ public:
                home_shard_index, worker_id_, commits, aborts);
 
         // Only worker 0 verifies final state after all workers finish
-        if (original_worker_id_ == 0) {
+        if (original_worker_id_ == 0)
+        {
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
             // Check all key groups (since worker 0 only wrote to key_group 0, we check all groups)
             int total_existing_keys = 0;
-            for (int group = 0; group < 10; group++) {
-                for (size_t i = 0; i < 5; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            for (int group = 0; group < 10; group++)
+            {
+                for (size_t i = 0; i < 5; i++)
+                {
+                    void *txn = db->new_txn(0, arena, txn_buf());
                     std::string key = "overlap_key_" + std::to_string(group * 5 + i);
                     std::string value;
-                    try {
+                    try
+                    {
                         bool exists = table->get(txn, key, value);
                         db->commit_txn(txn);
-                        if (exists) {
+                        if (exists)
+                        {
                             total_existing_keys++;
                         }
-                    } catch (abstract_db::abstract_abort_exception &ex) {
+                    }
+                    catch (abstract_db::abstract_abort_exception &ex)
+                    {
                         db->abort_txn(txn);
                     }
                 }
@@ -285,10 +269,12 @@ public:
         }
     }
 
-    void test_cross_shard_contention() {
+    void test_cross_shard_contention()
+    {
         printf("\n[TEST_CROSS_SHARD] === Testing Cross-Shard Contention Thread:%ld ===\n", std::this_thread::get_id());
 
-        if (BenchmarkConfig::getInstance().getNshards() < 2) {
+        if (BenchmarkConfig::getInstance().getNshards() < 2)
+        {
             return;
         }
 
@@ -298,29 +284,31 @@ public:
 
         // All threads access the same keys on both shards
         int commits = 0, aborts = 0;
-        for (size_t i = 0; i < 10; i++) {
-            // Pass is_mr = true for cross-shard (multi-region) transactions
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Created MR transaction (is_mr=true) for txn %zu\n",
-                   home_shard_index, worker_id_, i);
+        for (size_t i = 0; i < 10; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string shared_local_key = "cross_shard_local";
             std::string shared_remote_key = "cross_shard_remote";
             std::string value = mako::Encode("worker_" + std::to_string(worker_id_) + "_iter_" + std::to_string(i));
-            // writing on two different keys located on different shards
-            try {
-                // table->put(txn, shared_local_key, value);
-                // table->put(txn, shared_remote_key, value);
-                table->get(txn, shared_remote_key, value); // read to create cross-shard txn
+
+            try
+            {
+                table->put(txn, shared_local_key, value);
+                table->put(txn, shared_remote_key, value);
                 db->commit_txn(txn);
                 commits++;
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] txn %zu (local:%d remote:%d) COMMITTED\n",
                        home_shard_index, worker_id_, i, home_shard_index, remote_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 aborts++;
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] txn %zu (local:%d remote:%d) ABORTED\n",
                        home_shard_index, worker_id_, i, home_shard_index, remote_shard_index);
-            } catch (int error_code) {
+            }
+            catch (int error_code)
+            {
                 db->abort_txn(txn);
                 aborts++;
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] txn %zu (local:%d remote:%d) ABORTED (timeout/error: %d)\n",
@@ -332,28 +320,37 @@ public:
                home_shard_index, worker_id_, commits, aborts);
 
         // Only worker 0 verifies final state after all workers finish
-        if (original_worker_id_ == 0) {
+        if (original_worker_id_ == 0)
+        {
             std::this_thread::sleep_for(std::chrono::seconds(3));
 
             // Read to verify records on local shard
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string local_key = "cross_shard_local";
             std::string local_value;
-            try {
+            try
+            {
                 bool local_exists = table->get(txn, local_key, local_value);
                 db->commit_txn(txn);
-                if (local_exists) {
+                if (local_exists)
+                {
                     printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: local key EXISTS on shard %d\n",
                            home_shard_index, worker_id_, home_shard_index);
-                } else {
+                }
+                else
+                {
                     printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: local key DOES NOT EXIST on shard %d\n",
                            home_shard_index, worker_id_, home_shard_index);
                 }
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: local key read ABORTED\n",
                        home_shard_index, worker_id_);
-            } catch (int error_code) {
+            }
+            catch (int error_code)
+            {
                 db->abort_txn(txn);
                 printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: local key read ABORTED (timeout/error: %d)\n",
                        home_shard_index, worker_id_, error_code);
@@ -361,24 +358,32 @@ public:
 
             // Read to verify records on remote shard (sequential - after txn completes)
             {
-                void *txn2 = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+                void *txn2 = db->new_txn(0, arena, txn_buf());
                 std::string remote_key = "cross_shard_remote";
                 std::string remote_value;
-                try {
+                try
+                {
                     bool remote_exists = table->get(txn2, remote_key, remote_value);
                     db->commit_txn(txn2);
-                    if (remote_exists) {
+                    if (remote_exists)
+                    {
                         printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: remote key EXISTS on shard %d\n",
                                home_shard_index, worker_id_, remote_shard_index);
-                    } else {
+                    }
+                    else
+                    {
                         printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: remote key DOES NOT EXIST on shard %d\n",
                                home_shard_index, worker_id_, remote_shard_index);
                     }
-                } catch (abstract_db::abstract_abort_exception &ex) {
+                }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
                     db->abort_txn(txn2);
                     printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: remote key read ABORTED\n",
                            home_shard_index, worker_id_);
-                } catch (int error_code) {
+                }
+                catch (int error_code)
+                {
                     db->abort_txn(txn2);
                     printf("[TEST_CROSS_SHARD] [Shard %d Worker %d] Final read: remote key read ABORTED (timeout/error: %d)\n",
                            home_shard_index, worker_id_, error_code);
@@ -387,55 +392,8 @@ public:
         }
     }
 
-    void test_put_then_get() {
-        printf("\n[TEST_PUT_THEN_GET] === Testing Put Then Get Thread:%ld ===\n", std::this_thread::get_id());
-
-        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
-        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
-
-        std::string test_key = "put_get_test_key";
-        std::string put_value = mako::Encode("value_from_put_txn");
-
-        // // Transaction 1: PUT the key
-        printf("[TEST_PUT_THEN_GET] [Shard %d] Starting PUT transaction for key: %s\n", home_shard_index, test_key.c_str());
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-            try {
-                table->put(txn, test_key, put_value);
-                db->commit_txn(txn);
-                printf("[TEST_PUT_THEN_GET] [Shard %d] PUT transaction COMMITTED\n", home_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf("[TEST_PUT_THEN_GET] [Shard %d] PUT transaction ABORTED\n", home_shard_index);
-                return;
-            }
-        }
-
-        // Small delay to ensure PUT is fully committed
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // Transaction 2: GET the key
-        // printf("[TEST_PUT_THEN_GET] [Shard %d] Starting GET transaction for key: %s\n", home_shard_index, test_key.c_str());
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string get_value;
-            try {
-                bool exists = table->get(txn, test_key, get_value);
-                db->commit_txn(txn);
-                if (exists) {
-                    printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction COMMITTED - key EXISTS, value: %s\n", 
-                           home_shard_index, get_value.substr(0, 50).c_str());
-                } else {
-                    printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction COMMITTED - key DOES NOT EXIST\n", home_shard_index);
-                }
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf("[TEST_PUT_THEN_GET] [Shard %d] GET transaction ABORTED\n", home_shard_index);
-            }
-        }
-    }
-
-    void test_read_write_contention() {
+    void test_read_write_contention()
+    {
         printf("\n[TEST_RW_CONTENTION] === Testing Read-Write Contention Thread:%ld ===\n", std::this_thread::get_id());
 
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
@@ -445,15 +403,20 @@ public:
         bool is_writer = (worker_id_ % 2 == 0);
 
         int commits = 0, aborts = 0;
-        for (size_t i = 0; i < 10; i++) {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+        for (size_t i = 0; i < 10; i++)
+        {
+            void *txn = db->new_txn(0, arena, txn_buf());
             std::string key = "rw_key_" + std::to_string(i % 3); // 3 shared keys
 
-            try {
-                if (is_writer) {
+            try
+            {
+                if (is_writer)
+                {
                     std::string value = mako::Encode("writer_" + std::to_string(worker_id_) + "_" + std::to_string(i));
                     table->put(txn, key, value);
-                } else {
+                }
+                else
+                {
                     std::string value;
                     table->get(txn, key, value);
                 }
@@ -461,7 +424,9 @@ public:
                 commits++;
                 printf("[TEST_RW_CONTENTION] [Shard %d Worker %d] %s key=%s txn %zu COMMITTED\n",
                        home_shard_index, worker_id_, is_writer ? "WRITE" : "READ", key.c_str(), i);
-            } catch (abstract_db::abstract_abort_exception &ex) {
+            }
+            catch (abstract_db::abstract_abort_exception &ex)
+            {
                 db->abort_txn(txn);
                 aborts++;
                 printf("[TEST_RW_CONTENTION] [Shard %d Worker %d] %s key=%s txn %zu ABORTED\n",
@@ -473,22 +438,28 @@ public:
                home_shard_index, worker_id_, commits, aborts);
 
         // Only worker 0 verifies final state after all workers finish
-        if (original_worker_id_ == 0) {
+        if (original_worker_id_ == 0)
+        {
             std::this_thread::sleep_for(std::chrono::seconds(3));
             return;
 
             int existing_keys = 0;
-            for (size_t i = 0; i < 3; i++) {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+            for (size_t i = 0; i < 3; i++)
+            {
+                void *txn = db->new_txn(0, arena, txn_buf());
                 std::string key = "rw_key_" + std::to_string(i);
                 std::string value;
-                try {
+                try
+                {
                     bool exists = table->get(txn, key, value);
                     db->commit_txn(txn);
-                    if (exists) {
+                    if (exists)
+                    {
                         existing_keys++;
                     }
-                } catch (abstract_db::abstract_abort_exception &ex) {
+                }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
                     db->abort_txn(txn);
                 }
             }
@@ -497,499 +468,91 @@ public:
         }
     }
 
-    // Test MR reservation logic:
-    // 1) SR transaction should abort when trying to write to a record reserved by MR
-    // 2) MR transaction should correctly reserve during read and unreserve after commit/abort
-    void test_mr_reservation_blocks_sr() {
-        printf("\n[TEST_MR_RESERVATION] === Testing MR Reservation Blocks SR Thread:%ld ===\n", std::this_thread::get_id());
+    void microbench_mr_sr_abort(int num_txns = 1000)
+    {
+        printf("\n[MICROBENCH_MR_SR] === Microbenchmark MR/SR Abort Test (Thread:%ld) ===\n", std::this_thread::get_id());
 
         int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        int remote_shard_index = home_shard_index == 0 ? 1 : 0;
         mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
 
-        // Only run this test with multiple workers
-        // Worker 0: MR transaction that reserves and holds
-        // Worker 1: SR transaction that tries to write (should abort)
-        
-        
-        std::string shared_key = "mr_reservation_test_key";
-
-        auto get_timestamp_ms = []() {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-        };
-        
-        if (original_worker_id_ == 0 && home_shard_index == 0) {
-            // First, create the key so it exists
-            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Creating initial key: %s\n", get_timestamp_ms(), worker_id_, shared_key.c_str());
+        // --- Pre-populate all keys for both local and remote ---
+        for (int i = 0; i < num_txns; ++i)
+        {
             {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr - SR for setup*/);
-                std::string value = mako::Encode("initial_value");
-                try {
-                    table->put(txn, shared_key, value);
+
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false);
+                std::string key_local = "microbench_mr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(i);
+                std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(i);
+                std::string value = mako::Encode("mr_val_" + std::to_string(i));
+                try
+                {
+                    table->put(txn, key_local, value);
+                    table->put(txn, key_remote, value);
                     db->commit_txn(txn);
-                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Initial key created successfully\n", get_timestamp_ms(), worker_id_);
-                } catch (abstract_db::abstract_abort_exception &ex) {
+                }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
                     db->abort_txn(txn);
-                    printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Failed to create initial key\n", get_timestamp_ms(), worker_id_);
-                    return;
                 }
             }
-            
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            // Run 1000 MR cross-shard transactions
-            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Starting 1000 MR cross-shard transactions\n", get_timestamp_ms(), worker_id_);
-            int mr_commits = 0, mr_aborts = 0;
-            
-            for (int mr_txn = 0; mr_txn < 1000; mr_txn++) {
-                auto start = std::chrono::high_resolution_clock::now();
+        }
+
+        int mr_commits = 0, mr_aborts = 0;
+        int sr_commits = 0, sr_aborts = 0;
+        const int hot_keys = 4;
+
+        for (int i = 0; i < num_txns; ++i)
+        {
+            // --- MR transaction: cross-shard (local put + remote get) ---
+
+                int key_id = i % hot_keys; // induce contention on a small set of keys
+      {
                 void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-                std::string value;
-                try {
-                    // Access local shard key
-                    std::string local_key = "mr_local_" + std::to_string(mr_txn);
-                    bool exists_local = table->get(txn, local_key, value);
-                    std::string local_value = mako::Encode("mr_local_value_" + std::to_string(mr_txn));
-                    table->put(txn, local_key, local_value);
-                    
-                    // Access remote shard key (cross-shard access)
-                    std::string remote_key = "mr_remote_" + std::to_string(mr_txn);
-                    bool exists_remote = table->get(txn, remote_key, value);
-                    std::string remote_value = mako::Encode("mr_remote_value_" + std::to_string(mr_txn));
-                    table->put(txn, remote_key, remote_value);
-                    
-                    // Now commit - this should unreserve both keys
+                std::string key_local = "microbench_mr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(key_id);
+                std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
+                std::string value = mako::Encode("mr_val_" + std::to_string(i));
+                try
+                {
+                    table->put(txn, key_local, value); // local put
+                    std::string remote_val;
+                    table->get(txn, key_remote, remote_val); // remote get
+                    // add sleep
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                     db->commit_txn(txn);
                     mr_commits++;
-                    
-                    auto end = std::chrono::high_resolution_clock::now();
-                    double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                    g_mr_latencies.add(latency_us);
-                    
-                    if (mr_txn % 100 == 0) {
-                        printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR cross-shard transaction %d COMMITTED\n", 
-                               get_timestamp_ms(), worker_id_, mr_txn);
-                    }
-                } catch (abstract_db::abstract_abort_exception &ex) {
-                    db->abort_txn(txn);
-                    mr_aborts++;
-                    
-                    auto end = std::chrono::high_resolution_clock::now();
-                    double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                    g_mr_latencies.add(latency_us);
-                    
-                    if (mr_txn % 100 == 0) {
-                        printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR cross-shard transaction %d ABORTED\n", 
-                               get_timestamp_ms(), worker_id_, mr_txn);
-                    }
-                } catch (int error_code) {
-                    db->abort_txn(txn);
-                    mr_aborts++;
-                    
-                    auto end = std::chrono::high_resolution_clock::now();
-                    double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                    g_mr_latencies.add(latency_us);
-                    
-                    if (mr_txn % 100 == 0) {
-                        printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR cross-shard transaction %d ABORTED (error: %d)\n", 
-                               get_timestamp_ms(), worker_id_, mr_txn, error_code);
-                    }
                 }
-                
-                // // Small sleep every 10 transactions
-                // if (mr_txn % 10 == 0) {
-                //     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                // }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
+                    db->abort_txn(txn);
+                    mr_aborts++;
+                }
             }
-            
-            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] MR SUMMARY: %d commits, %d aborts out of 1000 transactions\n", 
-                   get_timestamp_ms(), worker_id_, mr_commits, mr_aborts);
-        }
-        else if (original_worker_id_ == 1) {
-            // Wait for worker 0 to create the key and start MR transaction
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            
-            // Try SR write while MR holds reservation - should ABORT
-            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] Starting SR transaction to write (should abort due to reservation)\n", get_timestamp_ms(), worker_id_);
-            int sr_aborts = 0;
-            int sr_commits = 0;
-            
-            // Increased to 1000 transactions for better benchmarking
-            for (int attempt = 0; attempt < 1000; attempt++) {
-                auto start = std::chrono::high_resolution_clock::now();
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr - SR transaction*/);
-                std::string value = mako::Encode("sr_write_attempt_" + std::to_string(attempt));
-                try {
-                    table->put(txn, shared_key, value);
+            { 
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+                std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
+
+                std::string value = mako::Encode("sr_val_" + std::to_string(i));
+                try
+                {
+                    table->put(txn, key_remote, value);
                     db->commit_txn(txn);
                     sr_commits++;
-                    
-                    auto end = std::chrono::high_resolution_clock::now();
-                    double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                    g_sr_latencies.add(latency_us);
-                    
-                    if (attempt % 100 == 0) {
-                        printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SR write attempt %d COMMITTED (reservation may have been released)\n", 
-                               get_timestamp_ms(), worker_id_, attempt);
-                    }
-                } catch (abstract_db::abstract_abort_exception &ex) {
+                }
+                catch (abstract_db::abstract_abort_exception &ex)
+                {
                     db->abort_txn(txn);
                     sr_aborts++;
-                    
-                    auto end = std::chrono::high_resolution_clock::now();
-                    double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                    g_sr_latencies.add(latency_us);
-                    
-                    if (attempt % 100 == 0) {
-                        const char* abort_reason = get_last_abort_reason();
-                        printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SR write attempt %d ABORTED - reason: %s ✓\n",     
-                               get_timestamp_ms(), worker_id_, attempt, abort_reason ? abort_reason : "unknown");
-                    }
-                }
-                // Reduced sleep to speed up the test
-                if (attempt % 10 == 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
             }
-            
-            printf("[%06ld] [TEST_MR_RESERVATION] [Worker %d] SUMMARY: SR commits=%d, SR aborts=%d\n", 
-                   get_timestamp_ms(), worker_id_, sr_commits, sr_aborts);
-            
-            if (sr_aborts > 0) {
-                printf(GREEN "[%06ld] [TEST_MR_RESERVATION] ✓ PASS: SR was blocked by MR reservation at least once (%.2f%% abort rate)\n" RESET, 
-                       get_timestamp_ms(), (sr_aborts * 100.0) / 1000);
-            } else {
-                printf(RED "[%06ld] [TEST_MR_RESERVATION] ✗ FAIL: SR was never blocked (timing issue or reservation not working)\n" RESET, get_timestamp_ms());
-            }
+
+      
+            // --- SR transaction: single-shard (local only) ---
         }
-        
-        // Other workers just wait
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        printf("[MICROBENCH_MR_SR] SUMMARY: MR: %d commits, %d aborts | SR: %d commits, %d aborts\n",
+               mr_commits, mr_aborts, sr_commits, sr_aborts);
     }
 
-    // Test that MR correctly reserves and unreserves
-    void test_mr_reserve_unreserve() {
-        printf("\n[TEST_MR_UNRESERVE] === Testing MR Reserve/Unreserve Thread:%ld ===\n", std::this_thread::get_id());
-
-        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
-        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
-
-        // Only worker 0 runs this test
-        if (original_worker_id_ != 0) {
-            return;
-        }
-
-        // print shard_home_index
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Running on shard %d\n", home_shard_index, home_shard_index);
-
-        std::string test_key = "mr_unreserve_test_key";
-        
-        // Step 1: Create the key
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 1: Creating test key\n", home_shard_index);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string value = mako::Encode("initial_value_for_unreserve_test");
-            try {
-                table->put(txn, test_key, value);
-                db->commit_txn(txn);
-                printf("[TEST_MR_UNRESERVE] [Shard %d] Key created successfully\n", home_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] Failed to create key\n" RESET, home_shard_index);
-                return;
-            }
-        }
-
-        // Step 2: MR transaction reads (reserves), writes, then commits (should unreserve)
-        // Note: MR must have writes to trigger proper commit protocol that releases reservations
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 2: MR read+write then commit (reserve then unreserve)\n", home_shard_index);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-            std::string value;
-            try {
-                table->get(txn, test_key, value);
-                printf("[TEST_MR_UNRESERVE] [Shard %d] MR read completed - key is now reserved\n", home_shard_index);
-                // MR must write to trigger proper commit protocol
-                std::string new_value = mako::Encode("mr_commit_test_value");
-                table->put(txn, test_key, new_value);
-                db->commit_txn(txn);
-                printf("[TEST_MR_UNRESERVE] [Shard %d] MR commit completed - key should be unreserved now\n", home_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] MR transaction aborted unexpectedly\n" RESET, home_shard_index);
-                return;
-            }
-        }
-
-        // Step 3: SR write should succeed (no reservation)
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 3: SR write after MR commit (should succeed)\n", home_shard_index);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string value = mako::Encode("sr_write_after_mr_commit");
-            try {
-                table->put(txn, test_key, value);
-                db->commit_txn(txn);
-                printf(GREEN "[TEST_MR_UNRESERVE] [Shard %d] ✓ SR write succeeded after MR unreserve\n" RESET, home_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] ✗ SR write failed - reservation may not have been released\n" RESET, home_shard_index);
-            }
-        }
-
-        // Step 4: MR transaction reads (reserves), writes, then ABORTS (should still unreserve)
-        // Note: MR must have writes to trigger proper abort protocol that releases reservations
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 4: MR read+write then ABORT (reserve then unreserve on abort)\n", home_shard_index);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-            std::string value;
-            try {
-                table->get(txn, test_key, value);
-                printf("[TEST_MR_UNRESERVE] [Shard %d] MR read completed - key is now reserved\n", home_shard_index);
-                // MR must write to trigger proper abort protocol
-                std::string new_value = mako::Encode("mr_abort_test_value");
-                table->put(txn, test_key, new_value);
-                // Intentionally abort
-                throw abstract_db::abstract_abort_exception();
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf("[TEST_MR_UNRESERVE] [Shard %d] MR abort completed - key should be unreserved now\n", home_shard_index);
-            }
-        }
-
-        // Step 5: SR write should succeed after MR abort (no reservation)
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Step 5: SR write after MR abort (should succeed)\n", home_shard_index);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string value = mako::Encode("sr_write_after_mr_abort");
-            try {
-                table->put(txn, test_key, value);
-                db->commit_txn(txn);
-                printf(GREEN "[TEST_MR_UNRESERVE] [Shard %d] ✓ SR write succeeded after MR abort unreserve\n" RESET, home_shard_index);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf(RED "[TEST_MR_UNRESERVE] [Shard %d] ✗ SR write failed - reservation may not have been released on abort\n" RESET, home_shard_index);
-            }
-        }
-
-        printf("[TEST_MR_UNRESERVE] [Shard %d] Test completed\n", home_shard_index);
-    }
-
-    // Test multiple MR transactions can reserve the same key (counter-based reservation)
-    void test_multiple_mr_reservations() {
-        printf("\n[TEST_MULTI_MR] === Testing Multiple MR Reservations Thread:%ld ===\n", std::this_thread::get_id());
-
-        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
-        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
-
-        std::string shared_key = "multi_mr_test_key";
-        
-        if (original_worker_id_ == 0) {
-            // Create the key first
-            printf("[TEST_MULTI_MR] [Worker %d] Creating test key\n", worker_id_);
-            {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-                std::string value = mako::Encode("initial_multi_mr_value");
-                try {
-                    table->put(txn, shared_key, value);
-                    db->commit_txn(txn);
-                } catch (abstract_db::abstract_abort_exception &ex) {
-                    db->abort_txn(txn);
-                    return;
-                }
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        
-        // All workers (0, 1, 2, ...) start MR transactions simultaneously
-        // They should all be able to reserve the same key (counter allows multiple reservations)
-        // Note: MR must have writes to trigger proper commit protocol that releases reservations
-        printf("[TEST_MULTI_MR] [Worker %d] Starting MR transaction to reserve key\n", original_worker_id_);
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
-            std::string value;
-            try {
-                bool exists = table->get(txn, shared_key, value);
-                printf("[TEST_MULTI_MR] [Worker %d] MR read succeeded, key exists=%d\n", original_worker_id_, exists);
-                
-                // Hold for a bit
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                
-                // MR must write to trigger proper commit protocol
-                std::string new_value = mako::Encode("multi_mr_worker_" + std::to_string(original_worker_id_));
-                table->put(txn, shared_key, new_value);
-                
-                db->commit_txn(txn);
-                printf(GREEN "[TEST_MULTI_MR] [Worker %d] MR transaction COMMITTED ✓\n" RESET, original_worker_id_);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf(RED "[TEST_MULTI_MR] [Worker %d] MR transaction ABORTED ✗\n" RESET, original_worker_id_);
-            }
-        }
-        
-        //std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-
-    // Test SR aborts MR scenario with simple 2-key workload
-    void test_sr_aborts_mr_simple() {
-        printf("\n[TEST_SR_ABORTS_MR] === Testing SR Aborts MR with 2 Keys Thread:%ld ===\n", std::this_thread::get_id());
-
-        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
-
-        // Two keys: key_shard0 on shard 0, key_shard1 on shard 1
-        std::string key_shard0 = "key_shard0";
-        std::string key_shard1 = "key_shard1";
-        
-        auto get_timestamp_ms = []() {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
-        };
-        
-        // Initialize both keys
-        printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Initializing keys\n", get_timestamp_ms(), worker_id_);
-        
-        // Initialize key_shard0
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string value = mako::Encode("initial_value_shard0");
-            try {
-                table->put(txn, key_shard0, value);
-                db->commit_txn(txn);
-                printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Created key_shard0\n", get_timestamp_ms(), worker_id_);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Failed to create key_shard0\n", get_timestamp_ms(), worker_id_);
-            }
-        }
-        
-        // Initialize key_shard1
-        {
-            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
-            std::string value = mako::Encode("initial_value_shard1");
-            try {
-                table->put(txn, key_shard1, value);
-                db->commit_txn(txn);
-                printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Created key_shard1\n", get_timestamp_ms(), worker_id_);
-            } catch (abstract_db::abstract_abort_exception &ex) {
-                db->abort_txn(txn);
-                printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Failed to create key_shard1\n", get_timestamp_ms(), worker_id_);
-            } catch (int error_code) {
-                db->abort_txn(txn);
-                printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Failed to create key_shard1 (error: %d)\n", 
-                       get_timestamp_ms(), worker_id_, error_code);
-            }
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        
-        // // Run 1000 transactions - half MR, half SR
-        // printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] Starting 1000 transactions (500 MR, 500 SR)\n", get_timestamp_ms(), worker_id_);
-        // int mr_commits = 0, mr_aborts = 0;
-        // int sr_commits = 0, sr_aborts = 0;
-        
-        // for (int txn_num = 0; txn_num < 5; txn_num++) {
-        //     auto start = std::chrono::high_resolution_clock::now();
-            
-        //     // Alternate: even = MR, odd = SR
-        //     bool is_mr = (txn_num % 2 == 0);
-        //     void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, is_mr);
-            
-        //     try {
-        //         std::string value;
-                
-        //         if (is_mr) {
-        //             // MR transaction: 50% read shard0 write shard1, 50% read shard1 write shard0
-        //             if (rand() % 2 == 0) {
-        //                 table->get(txn, key_shard0, value);
-        //                 std::string new_value = mako::Encode("mr_" + std::to_string(txn_num) + "_0to1");
-        //                 table->put(txn, key_shard1, new_value);
-        //             } else {
-        //                 table->get(txn, key_shard1, value);
-        //                 std::string new_value = mako::Encode("mr_" + std::to_string(txn_num) + "_1to0");
-        //                 table->put(txn, key_shard0, new_value);
-        //             }
-                    
-        //             db->commit_txn(txn);
-        //             mr_commits++;
-                    
-        //             auto end = std::chrono::high_resolution_clock::now();
-        //             double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-        //             g_mr_latencies.add(latency_us);
-                    
-        //             if (txn_num % 100 == 0) {
-        //                 printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] MR txn %d COMMITTED\n", 
-        //                        get_timestamp_ms(), worker_id_, txn_num);
-        //             }
-        //         } else {
-        //             // SR transaction: pick one key with 50% probability
-        //             std::string key = (rand() % 2 == 0) ? key_shard0 : key_shard1;
-                    
-        //             table->get(txn, key, value);
-        //             std::string new_value = mako::Encode("sr_" + std::to_string(txn_num) + "_worker" + std::to_string(worker_id_));
-        //             table->put(txn, key, new_value);
-                    
-        //             db->commit_txn(txn);
-        //             sr_commits++;
-                    
-        //             auto end = std::chrono::high_resolution_clock::now();
-        //             double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-        //             g_sr_latencies.add(latency_us);
-                    
-        //             if (txn_num % 100 == 0) {
-        //                 printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] SR txn %d on key %s COMMITTED\n", 
-        //                        get_timestamp_ms(), worker_id_, txn_num, key.c_str());
-        //             }
-        //         }
-        //     } catch (abstract_db::abstract_abort_exception &ex) {
-        //         db->abort_txn(txn);
-                
-        //         auto end = std::chrono::high_resolution_clock::now();
-        //         double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                
-        //         if (is_mr) {
-        //             mr_aborts++;
-        //             g_mr_latencies.add(latency_us);
-        //             if (txn_num % 100 == 0) {
-        //                 printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] MR txn %d ABORTED\n", 
-        //                        get_timestamp_ms(), worker_id_, txn_num);
-        //             }
-        //         } else {
-        //             sr_aborts++;
-        //             g_sr_latencies.add(latency_us);
-        //             if (txn_num % 100 == 0) {
-        //                 const char* abort_reason = get_last_abort_reason();
-        //                 printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] SR txn %d ABORTED - reason: %s\n", 
-        //                        get_timestamp_ms(), worker_id_, txn_num, abort_reason ? abort_reason : "unknown");
-        //             }
-        //         }
-        //     } catch (int error_code) {
-        //         db->abort_txn(txn);
-                
-        //         auto end = std::chrono::high_resolution_clock::now();
-        //         double latency_us = std::chrono::duration<double, std::micro>(end - start).count();
-                
-        //         if (is_mr) {
-        //             mr_aborts++;
-        //             g_mr_latencies.add(latency_us);
-        //             if (txn_num % 100 == 0) {
-        //                 printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] MR txn %d ABORTED (error: %d)\n", 
-        //                        get_timestamp_ms(), worker_id_, txn_num, error_code);
-        //             }
-        //         } else {
-        //             sr_aborts++;
-        //             g_sr_latencies.add(latency_us);
-        //         }
-        //     }
-        // }
-        
-        // printf("[%06ld] [TEST_SR_ABORTS_MR] [Worker %d] SUMMARY:\n", get_timestamp_ms(), worker_id_);
-        // printf("  MR: %d commits, %d aborts (%.2f%% abort rate)\n", 
-        //        mr_commits, mr_aborts, (mr_aborts * 100.0) / (mr_commits + mr_aborts));
-        // printf("  SR: %d commits, %d aborts (%.2f%% abort rate)\n", 
-        //        sr_commits, sr_aborts, (sr_aborts * 100.0) / (sr_commits + sr_aborts));
-        
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
 protected:
     abstract_db *const db;
     int worker_id_;
@@ -1001,7 +564,8 @@ protected:
 
 void run_worker_tests(abstract_db *db, int worker_id,
                       spin_barrier *barrier_ready,
-                      spin_barrier *barrier_start) {
+                      spin_barrier *barrier_start)
+{
     // Add thread ID to distinguish workers
     printf("[Worker %d] Starting on thread %ld\n", worker_id, std::this_thread::get_id());
 
@@ -1014,25 +578,17 @@ void run_worker_tests(abstract_db *db, int worker_id,
 
     // Run all tests
     // worker->test_basic_transactions();
-    // worker->test_mr_reservation_blocks_sr();
-    worker->test_sr_aborts_mr_simple();
     // worker->test_single_key_contention();
     // worker->test_overlapping_keys();
     // worker->test_cross_shard_contention();
     // worker->test_read_write_contention();
-    // worker->test_put_then_get();
-    
-    // MR reservation tests
-    // worker->test_mr_reservation_blocks_sr();
-    // worker->test_mr_reserve_unreserve();
-    // worker->test_multiple_mr_reservations();
-    // worker->test_sr_aborts_mr_simple();
+    worker->microbench_mr_sr_abort(1000);
 
     printf("[Worker %d] Completed\n", worker_id);
-    delete worker;
 }
 
-void run_tests(abstract_db* db) {
+void run_tests(abstract_db *db)
+{
     // Pre-open tables ONCE before creating threads to avoid serialization
     size_t nthreads = BenchmarkConfig::getInstance().getNthreads();
     std::vector<std::thread> worker_threads;
@@ -1040,7 +596,8 @@ void run_tests(abstract_db* db) {
     spin_barrier barrier_ready(nthreads);
     spin_barrier barrier_start(1);
 
-    for (size_t i = 0; i < nthreads; ++i) {
+    for (size_t i = 0; i < nthreads; ++i)
+    {
         worker_threads.emplace_back(run_worker_tests, db, i,
                                     &barrier_ready, &barrier_start);
     }
@@ -1050,25 +607,29 @@ void run_tests(abstract_db* db) {
     barrier_start.count_down();
 
     // Wait for all worker threads to complete
-    for (auto& t : worker_threads) {
+    for (auto &t : worker_threads)
+    {
         t.join();
     }
 }
 
 // Verify data integrity for all tests
-bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
+bool verify_data_integrity(abstract_db *db, int nshards, int nthreads)
+{
     mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
     auto records = scan_tables(db, table);
 
     printf("\n=== Database contents (%zu rows) ===\n", records.size());
-    for (const auto &entry : records) {
+    for (const auto &entry : records)
+    {
         printf("%s => %s\n", entry.first.c_str(), entry.second.c_str());
     }
     fflush(stdout);
 
     // Build a map of all keys for quick lookup
     std::map<std::string, std::string> db_map;
-    for (const auto& record : records) {
+    for (const auto &record : records)
+    {
         db_map[record.first] = record.second;
     }
 
@@ -1087,8 +648,10 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
         int count = 0;
         int value_mismatches = 0;
 
-        for (const auto& kv : db_map) {
-            if (kv.first.find("test_key_w") == 0 && kv.first.find("_remote") == std::string::npos) {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first.find("test_key_w") == 0 && kv.first.find("_remote") == std::string::npos)
+            {
                 count++;
 
                 // Extract worker_id and index from key: test_key_w<worker_id>_<i>
@@ -1101,7 +664,8 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
                 std::string expected_value = "test_value_w" + worker_id_str + "_" + index_str;
 
                 // Check if value contains expected string
-                if (kv.second.find(expected_value) == std::string::npos) {
+                if (kv.second.find(expected_value) == std::string::npos)
+                {
                     printf(RED "✗ Value mismatch for key '%s': expected '%s', got '%s'\n" RESET,
                            kv.first.c_str(), expected_value.c_str(), kv.second.substr(0, 50).c_str());
                     value_mismatches++;
@@ -1111,24 +675,32 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
         }
 
         printf("Found %d basic transaction keys\n", count);
-        if (count == 0) {
+        if (count == 0)
+        {
             printf(RED "✗ FAIL: No basic keys found\n" RESET);
             failed = true;
-        } else if (value_mismatches > 0) {
+        }
+        else if (value_mismatches > 0)
+        {
             printf(RED "✗ FAIL: %d value mismatches\n" RESET, value_mismatches);
-        } else {
+        }
+        else
+        {
             printf(GREEN "✓ PASS: All keys and values correct\n" RESET);
         }
     }
 
     // Test 1b: Verify basic remote transaction keys (from test_basic_transactions, 2-shard only)
-    if (nshards >= 2) {
+    if (nshards >= 2)
+    {
         printf("\n--- Test 1b: Basic Remote Transactions (test_basic_transactions) ---\n");
         int count = 0;
         int value_mismatches = 0;
 
-        for (const auto& kv : db_map) {
-            if (kv.first.find("test_key2_w") == 0 && kv.first.find("_remote") != std::string::npos) {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first.find("test_key2_w") == 0 && kv.first.find("_remote") != std::string::npos)
+            {
                 count++;
 
                 // Extract worker_id and index from key: test_key2_w<worker_id>_<i>_remote
@@ -1142,7 +714,8 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
                 std::string expected_value = "test_value2_w" + worker_id_str + "_" + index_str;
 
                 // Check if value contains expected string
-                if (kv.second.find(expected_value) == std::string::npos) {
+                if (kv.second.find(expected_value) == std::string::npos)
+                {
                     printf(RED "✗ Value mismatch for key '%s': expected '%s', got '%s'\n" RESET,
                            kv.first.c_str(), expected_value.c_str(), kv.second.substr(0, 50).c_str());
                     value_mismatches++;
@@ -1152,12 +725,17 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
         }
 
         printf("Found %d basic remote keys\n", count);
-        if (count == 0) {
+        if (count == 0)
+        {
             printf(RED "✗ FAIL: No remote keys found\n" RESET);
             failed = true;
-        } else if (value_mismatches > 0) {
+        }
+        else if (value_mismatches > 0)
+        {
             printf(RED "✗ FAIL: %d value mismatches\n" RESET, value_mismatches);
-        } else {
+        }
+        else
+        {
             printf(GREEN "✓ PASS: All keys and values correct\n" RESET);
         }
     }
@@ -1166,11 +744,14 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
     printf("\n--- Test 2: Single Key Contention (test_single_key_contention) ---\n");
     {
         int count = 0;
-        for (const auto& kv : db_map) {
-            if (kv.first == "contention_key_shared") {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first == "contention_key_shared")
+            {
                 count++;
                 if (kv.second.find("worker_") == std::string::npos ||
-                    kv.second.find("_iter_") == std::string::npos) {
+                    kv.second.find("_iter_") == std::string::npos)
+                {
                     printf(RED "✗ Invalid value for key '%s'\n" RESET, kv.first.c_str());
                     failed = true;
                 }
@@ -1178,21 +759,32 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
         }
         printf("Found %d contention key\n", count);
         // In sharded config, key may be on a different shard
-        if (nshards >= 2) {
-            if (count > 1) {
+        if (nshards >= 2)
+        {
+            if (count > 1)
+            {
                 printf(RED "✗ FAIL: Found multiple contention keys (should be only 1 total)\n" RESET);
                 failed = true;
-            } else if (count == 1) {
+            }
+            else if (count == 1)
+            {
                 printf(GREEN "✓ PASS: Key exists on this shard\n" RESET);
-            } else {
+            }
+            else
+            {
                 printf(GREEN "✓ INFO: Key is on a different shard\n" RESET);
             }
-        } else {
+        }
+        else
+        {
             // For single shard, key must exist
-            if (count != 1) {
+            if (count != 1)
+            {
                 printf(RED "✗ FAIL: Expected exactly 1 contention key\n" RESET);
                 failed = true;
-            } else {
+            }
+            else
+            {
                 printf(GREEN "✓ PASS\n" RESET);
             }
         }
@@ -1202,34 +794,44 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
     printf("\n--- Test 3: Overlapping Keys (test_overlapping_keys) ---\n");
     {
         int count = 0;
-        for (const auto& kv : db_map) {
-            if (kv.first.find("overlap_key_") == 0) {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first.find("overlap_key_") == 0)
+            {
                 count++;
                 if (kv.second.find("worker_") == std::string::npos ||
-                    kv.second.find("_iter_") == std::string::npos) {
+                    kv.second.find("_iter_") == std::string::npos)
+                {
                     printf(RED "✗ Invalid value for key '%s'\n" RESET, kv.first.c_str());
                     failed = true;
                 }
             }
         }
         printf("Found %d overlapping keys\n", count);
-        if (count == 0) {
+        if (count == 0)
+        {
             printf(RED "✗ FAIL: No overlapping keys found\n" RESET);
             failed = true;
-        } else {
+        }
+        else
+        {
             printf(GREEN "✓ PASS\n" RESET);
         }
     }
 
     // Test 4: Verify cross-shard contention keys (from test_cross_shard_contention(), 2-shard only)
-    if (nshards >= 2) {
+    if (nshards >= 2)
+    {
         printf("\n--- Test 4: Cross-Shard Contention (test_cross_shard_contention) ---\n");
         int count = 0;
-        for (const auto& kv : db_map) {
-            if (kv.first == "cross_shard_local" || kv.first == "cross_shard_remote") {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first == "cross_shard_local" || kv.first == "cross_shard_remote")
+            {
                 count++;
                 if (kv.second.find("worker_") == std::string::npos ||
-                    kv.second.find("_iter_") == std::string::npos) {
+                    kv.second.find("_iter_") == std::string::npos)
+                {
                     printf(RED "✗ Invalid value for key '%s'\n" RESET, kv.first.c_str());
                     failed = true;
                 }
@@ -1237,12 +839,17 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
         }
         printf("Found %d cross-shard keys (total across all shards: 2)\n", count);
         // Keys are distributed across shards
-        if (count > 2) {
+        if (count > 2)
+        {
             printf(RED "✗ FAIL: Too many cross-shard keys\n" RESET);
             failed = true;
-        } else if (count > 0) {
+        }
+        else if (count > 0)
+        {
             printf(GREEN "✓ PASS: Keys present on this shard\n" RESET);
-        } else {
+        }
+        else
+        {
             printf(GREEN "✓ INFO: Keys are on other shard(s)\n" RESET);
         }
     }
@@ -1251,10 +858,13 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
     printf("\n--- Test 5: Read-Write Contention (test_read_write_contention) ---\n");
     {
         int count = 0;
-        for (const auto& kv : db_map) {
-            if (kv.first.find("rw_key_") == 0) {
+        for (const auto &kv : db_map)
+        {
+            if (kv.first.find("rw_key_") == 0)
+            {
                 count++;
-                if (kv.second.find("writer_") == std::string::npos) {
+                if (kv.second.find("writer_") == std::string::npos)
+                {
                     printf(RED "✗ Invalid value for key '%s'\n" RESET, kv.first.c_str());
                     failed = true;
                 }
@@ -1264,31 +874,45 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
 
         // In 2-shard config, keys are distributed by hash, so we may have 0-3 keys per shard
         // Any distribution is valid as long as we have some keys present
-        if (nshards == 1) {
+        if (nshards == 1)
+        {
             // In single shard mode, we must have exactly 3 keys
-            if (count != 3) {
+            if (count != 3)
+            {
                 printf(RED "✗ FAIL: Expected 3 RW keys in single-shard mode, found %d\n" RESET, count);
                 failed = true;
-            } else {
+            }
+            else
+            {
                 printf(GREEN "✓ PASS: All 3 RW keys present\n" RESET);
             }
-        } else {
+        }
+        else
+        {
             // In multi-shard mode, keys are distributed across shards
-            if (count > 3) {
+            if (count > 3)
+            {
                 printf(RED "✗ FAIL: Found %d RW keys (max 3 expected)\n" RESET, count);
                 failed = true;
-            } else if (count > 0) {
+            }
+            else if (count > 0)
+            {
                 printf(GREEN "✓ PASS: Found %d RW keys on this shard\n" RESET, count);
-            } else {
+            }
+            else
+            {
                 printf(GREEN "✓ INFO: Keys are on other shard(s)\n" RESET);
             }
         }
     }
 
     printf("\n========================================\n");
-    if (failed) {
+    if (failed)
+    {
         printf(RED "=== VERIFICATION FAILED ===" RESET "\n");
-    } else {
+    }
+    else
+    {
         printf(GREEN "=== ALL VERIFICATIONS PASSED ===" RESET "\n");
     }
     printf("========================================\n");
@@ -1296,10 +920,12 @@ bool verify_data_integrity(abstract_db* db, int nshards, int nthreads) {
     return !failed;
 }
 
-int main(int argc, char **argv) {
-    
+int main(int argc, char **argv)
+{
+
     // All necessary parameters expected from users
-    if (argc != 6) {
+    if (argc != 6)
+    {
         printf("Usage: %s <nshards> <shardIdx> <nthreads> <paxos_proc_name> <is_replicated>\n", argv[0]);
         printf("Example: %s 2 0 6 localhost 1\n", argv[0]);
         return 1;
@@ -1311,14 +937,13 @@ int main(int argc, char **argv) {
     std::string paxos_proc_name = std::string(argv[4]);
     int is_replicated = std::stoi(argv[5]);
 
-    // Build config path - use mako_two_shards.yml for two shards with no replication
-    std::string config_path = get_current_absolute_path() + "../config/mako_two_shards.yml";
+    // Build config path - fix the format string to use std::to_string
+    std::string config_path = get_current_absolute_path() + "../src/mako/config/local-shards" + std::to_string(nshards) + "-warehouses" + std::to_string(nthreads) + ".yml";
     vector<string> paxos_config_file{
         get_current_absolute_path() + "../config/1leader_2followers/paxos" + std::to_string(nthreads) + "_shardidx" + std::to_string(shardIdx) + ".yml",
-        get_current_absolute_path() + "../config/occ_paxos.yml"
-    };
-    
-    auto& benchConfig = BenchmarkConfig::getInstance();
+        get_current_absolute_path() + "../config/occ_paxos.yml"};
+
+    auto &benchConfig = BenchmarkConfig::getInstance();
     benchConfig.setNshards(nshards);
     benchConfig.setShardIndex(shardIdx);
     benchConfig.setNthreads(nthreads);
@@ -1329,20 +954,22 @@ int main(int argc, char **argv) {
     benchConfig.setConfig(config);
     benchConfig.setPaxosConfigFile(paxos_config_file);
 
-    abstract_db* replicated_db = init_env();
+    abstract_db *replicated_db = init_env();
 
     printf("=== Mako Transaction Tests  ===\n");
-    
-    abstract_db* db = initWithDB();
 
-    if (benchConfig.getLeaderConfig()) {
+    abstract_db *db = initWithDB();
+
+    if (benchConfig.getLeaderConfig())
+    {
         // pre-declare sharded tables
         mako::setup_erpc_server();
         mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
 
-        map<int, abstract_ordered_index*> open_tables;
+        map<int, abstract_ordered_index *> open_tables;
         auto *local_table = table->shard_for_index(benchConfig.getShardIndex());
-        if (local_table) {
+        if (local_table)
+        {
             open_tables[local_table->get_table_id()] = local_table;
         }
         mako::setup_helper(db, std::ref(open_tables));
@@ -1350,45 +977,33 @@ int main(int argc, char **argv) {
         std::this_thread::sleep_for(std::chrono::seconds(5)); // Wait all shards finish setup
     }
 
-    if (benchConfig.getLeaderConfig()) {
+    if (benchConfig.getLeaderConfig())
+    {
         run_tests(db);
-        
-        // Print latency statistics
-        printf("\n" GREEN "========================================" RESET "\n");
-        printf(GREEN "=== BENCHMARK RESULTS ===" RESET "\n");
-        printf(GREEN "========================================" RESET "\n\n");
-        
-        g_mr_latencies.print_stats("MR TRANSACTIONS (Multi-Region with Reservation)");
-        g_sr_latencies.print_stats("SR TRANSACTIONS (Single-Region, blocked by MR)");
-        
-        printf(GREEN "========================================" RESET "\n");
-        printf(GREEN "=== END BENCHMARK RESULTS ===" RESET "\n");
-        printf(GREEN "========================================" RESET "\n\n");
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // Cleanup: stop helper and eRPC server threads before closing DB on leaders
-    if (benchConfig.getLeaderConfig()) {
+    if (benchConfig.getLeaderConfig())
+    {
         mako::stop_erpc_server();
     }
 
     db_close();
 
-    // Data integrity verification on followers, learners and leaders (commented out for benchmark)
-    /*
-    {
-        abstract_db* db2 = benchConfig.getLeaderConfig() ? db : replicated_db;
-        bool verification_passed = verify_data_integrity(db2, nshards, nthreads);
+    // Data integrity verification on followers, learners and leaders
+    // {
+    //     abstract_db* db2 = benchConfig.getLeaderConfig() ? db : replicated_db;
+    //     bool verification_passed = verify_data_integrity(db2, nshards, nthreads);
 
-        if (!verification_passed) {
-            printf("\n" RED "VERIFICATION FAILED - Database integrity compromised!" RESET "\n");
-            return 1;
-        }
-    }
-    */
+    //     if (!verification_passed) {
+    //         printf("\n" RED "VERIFICATION FAILED - Database integrity compromised!" RESET "\n");
+    //         return 1;
+    //     }
+    // }
 
-    printf("\n" GREEN "All benchmarks completed successfully!" RESET "\n");
+    printf("\n" GREEN "All tests completed successfully!" RESET "\n");
     std::cout.flush();
 
     return 0;

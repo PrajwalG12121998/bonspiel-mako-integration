@@ -348,6 +348,12 @@ class TransProxy {
         item().__rm_flags(TransItem::read_bit);
         return *this;
     }
+
+    TransProxy& remove_reserve() { // XXX should also cleanup_reserve
+        item().__rm_flags(TransItem::reserved_bit);
+        return *this;
+    }  
+    
     TransProxy& remove_write() { // XXX should also cleanup_write
         item().__rm_flags(TransItem::write_bit);
         return *this;
