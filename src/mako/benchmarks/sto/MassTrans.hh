@@ -573,16 +573,16 @@ public:
   }
   void unreserve(versioned_value *e) {
     unsigned long count_current = (unsigned long)TransactionTid::reservation_count(e->version());
-    printf("[MassTrans::unreserve(vv)] Called. Current version: 0x%lx, reservation_count: %lu, is_reserved: %d\n",
-           (unsigned long)e->version(), count_current, TransactionTid::is_reserved(e->version()));
+    // printf("[MassTrans::unreserve(vv)] Called. Current version: 0x%lx, reservation_count: %lu, is_reserved: %d\n",
+          //  (unsigned long)e->version(), count_current, TransactionTid::is_reserved(e->version()));
     // Only unreserve if actually reserved (count > 0)
     if (TransactionTid::is_reserved(e->version())) {
       unsigned long count_before = (unsigned long)TransactionTid::reservation_count(e->version());
       TransactionTid::unreserve(e->version());
       unsigned long count_after = (unsigned long)TransactionTid::reservation_count(e->version());
-      printf("[MassTrans::unreserve(vv)] Unreserved: count %lu -> %lu\n", count_before, count_after);
+      // printf("[MassTrans::unreserve(vv)] Unreserved: count %lu -> %lu\n", count_before, count_after);
     } else {
-      printf("[MassTrans::unreserve(vv)] SKIPPED - not reserved (count=0)\n");
+      // printf("[MassTrans::unreserve(vv)] SKIPPED - not reserved (count=0)\n");
     }
   }
   bool is_reserved(versioned_value *e) {
@@ -756,6 +756,7 @@ protected:
         // we had a weird race condition and now this element is gone. just abort at this point
         if (e->version() & invalid_bit) {
           unlock(e);
+          printf("reallyHandlePutFound: aborting due to invalid bit set during resize\n");
           Sto::abort();
           return;
         }
@@ -803,6 +804,7 @@ protected:
   bool handlePutFound(versioned_value *e, Str key, const ValueType& value) {
     auto item = t_item(e);
     if (!validityCheck(item, e)) {
+      printf("handlePutFound: aborting due to invalid bit set\n");
       Sto::abort();
       return false;
     }
@@ -1026,42 +1028,81 @@ protected:
   //   return true;
   // }
 
+  // static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
+  //   while (true) {
+  //     Version v_before = e->version();
+  //     if (is_locked(v_before)) {
+  //       printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
+  //       Sto::abort_without_throw();
+  //       TThread::transget_without_throw = true;
+  //       return false;
+  //     }
+  //     // Only reserve if not already reserved by this transaction
+  //     if (!item.has_flag(TransItem::reserved_bit)) {
+  //       // Try to reserve with timeout (to avoid spinning forever)
+  //       TransactionTid::reserve(e->version());
+  //       item.add_flags(TransItem::reserved_bit);
+  //     }
+  //     fence();
+  //     assign_val(val, e->read_value());
+  //     fence();
+  //     Version v_after = e->version();
+  //     fence();
+  //     // Check that only the reservation bits may have changed
+  //     // Version mask = ~(TransactionTid::reservation_mask);
+  //     if (TransactionTid::check_if_equal(v_before, v_after)) {
+  //       vers = v_after;
+  //       return true;
+  //     } else {
+  //       // Version changed (not just reservation bits): unreserve and retry
+  //       if (item.has_flag(TransItem::reserved_bit)) {
+  //         TransactionTid::unreserve(e->version());
+  //         item.remove_reserve();
+  //       }
+  //       // retry
+  //     }
+  //   }
+  //   // unreachable
+  //   return false;
+  // }
   static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
     while (true) {
-      Version v_before = e->version();
-      if (is_locked(v_before)) {
-        Sto::abort_without_throw();
-        TThread::transget_without_throw = true;
-        return false;
-      }
-      // Only reserve if not already reserved by this transaction
-      if (!item.has_flag(TransItem::reserved_bit)) {
-        // Try to reserve with timeout (to avoid spinning forever)
-        TransactionTid::reserve(e->version());
-        item.add_flags(TransItem::reserved_bit);
-      }
-      fence();
-      assign_val(val, e->read_value());
-      fence();
-      Version v_after = e->version();
-      fence();
-      // Check that only the reservation bits may have changed
-      Version mask = ~(TransactionTid::reservation_mask);
-      if ((v_after & mask) == (v_before & mask)) {
-        vers = v_after;
-        return true;
-      } else {
-        // Version changed (not just reservation bits): unreserve and retry
-        if (item.has_flag(TransItem::reserved_bit)) {
-          TransactionTid::unreserve(e->version());
-          item.remove_reserve();
+        Version v_before = e->version();
+        if (is_locked(v_before)) {
+            printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
+            Sto::abort_without_throw();
+            TThread::transget_without_throw = true;
+            return false;
         }
-        // retry
-      }
+        fence();
+        assign_val(val, e->read_value());
+        fence();
+        Version v_after = e->version();
+        fence();
+        if (v_before != v_after) {
+            // Version changed, retry
+            continue;
+        }
+        // Now try to reserve, but only if not already reserved by this txn
+        if (!item.has_flag(TransItem::reserved_bit)) {
+            TransactionTid::reserve(e->version());
+            item.add_flags(TransItem::reserved_bit);
+        }
+        // After reserving, check version again to ensure it didn't change (except reservation bits)
+        Version v_final = e->version();
+        if (TransactionTid::check_if_equal(v_before, v_final)) {
+            vers = v_final;
+            return true;
+        } else {
+          // we allow some race
+            vers = v_final;
+            // retry
+            return true;
+        }
     }
     // unreachable
     return false;
-  }
+}
   
 
   template <typename ValType>

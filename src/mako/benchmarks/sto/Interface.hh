@@ -223,6 +223,11 @@ public:
         return 1;  // CAS failed - caller should retry
     }
     
+
+    static bool check_if_equal(type v1, type v2) {
+        type mask = ~reservation_mask;
+        return (v1 & mask) == (v2 & mask);
+    }
     // Bounded retry with fast fail for MR transactions
     // Increased default retries from 1 to 50 to handle network latency (~70ms)
     // With 50 retries and brief spinning, MR can wait up to ~5-10ms for SR locks
@@ -252,8 +257,8 @@ public:
     static type reserve(type& v) {
         type old_v = v;
         assert((old_v & reservation_mask) < reservation_mask);
-        printf("[TransactionTid::reserve] Reserving. Old version: 0x%lx, reservation_count: %lu\n",
-               (unsigned long)old_v, (unsigned long)reservation_count(old_v));
+        // printf("[TransactionTid::reserve] Reserving. Old version: 0x%lx, reservation_count: %lu\n",
+            //    (unsigned long)old_v, (unsigned long)reservation_count(old_v));
         return __sync_fetch_and_add(&v, reservation_inc);
     }
 
@@ -351,12 +356,12 @@ public:
     // Returns: 0 = success, 1 = lock contention/retry, 2 = reserved by MR
     static int try_lock_if_not_reserved(type& v, int here) {
         type vv = v;
-        printf("[try_lock_if_not_reserved] thread_id=%d attempting lock_if_not_reserved on version 0x%lx (res_count=%lu)\n",
-               here, (unsigned long)vv, (unsigned long)reservation_count(vv)); 
+        // printf("[try_lock_if_not_reserved] thread_id=%d attempting lock_if_not_reserved on version 0x%lx (res_count=%lu)\n",
+            //    here, (unsigned long)vv, (unsigned long)reservation_count(vv)); 
         // Check reservation - if reserved, fail immediately
         if (vv & reservation_mask) {
-            printf("[try_lock_if_not_reserved] SR transaction blocked - record RESERVED by MR (thread_id=%d, version=0x%lx, res_count=%lu)\n",
-                   here, (unsigned long)vv, (unsigned long)reservation_count(vv));
+            // printf("[try_lock_if_not_reserved] SR transaction blocked - record RESERVED by MR (thread_id=%d, version=0x%lx, res_count=%lu)\n",
+                //    here, (unsigned long)vv, (unsigned long)reservation_count(vv));
             return 2;  // Reserved by MR - abort
         }
         

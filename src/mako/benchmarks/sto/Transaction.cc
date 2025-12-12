@@ -179,6 +179,7 @@ void Transaction::hard_check_opacity(TransItem *item, TransactionTid::type t)
     {
         TXP_INCREMENT(txp_hco_lock);
         mark_abort_because(item, "locked", t);
+        printf("transaction is locked\n");
         goto abort;
     }
     if (t & TransactionTid::nonopaque_bit)
@@ -197,6 +198,7 @@ void Transaction::hard_check_opacity(TransItem *item, TransactionTid::type t)
             if (!it->owner()->check(*it, *this) && (!may_duplicate_items_ || !preceding_duplicate_read(it)))
             {
                 mark_abort_because(item, "opacity check");
+                printf("opacity check failed\n");
                 goto abort;
             }
         }
@@ -206,6 +208,7 @@ void Transaction::hard_check_opacity(TransItem *item, TransactionTid::type t)
             if (!it->owner()->check_predicate(*it, *this, false))
             {
                 mark_abort_because(item, "opacity check_predicate");
+                printf("predicate check failed\n");
                 goto abort;
             }
         }
@@ -787,10 +790,12 @@ bool Transaction::try_commit(bool no_paxos)
                 auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count() % 1000000;
                 if (is_mr) {
+                    
+                 
                     printf("[%06ld] [MR_ABORT_VERSION_CHECK] MR transaction aborted - version check failed (thread_id=%d, tidx=%u, tset_size=%u)\n", 
                            now_ms, TThread::id(), tidx, tset_size_);
-                    printf("[MR_ABORT_VERSION_CHECK] This means a record's version changed between read and commit\n");
-                    printf("[MR_ABORT_VERSION_CHECK] Likely cause: SR transaction committed after MR reserved but before MR returned from network\n");
+                    // printf("[MR_ABORT_VERSION_CHECK] This means a record's version changed between read and commit\n");
+                    // printf("[MR_ABORT_VERSION_CHECK] Likely cause: SR transaction committed after MR reserved but before MR returned from network\n");
                 } else {
                     printf("[%06ld] [TXN_ABORT] Commit version check failed (thread_id=%d, is_mr=%d)\n", 
                            now_ms, TThread::id(), is_mr);

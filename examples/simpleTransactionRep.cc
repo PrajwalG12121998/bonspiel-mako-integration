@@ -506,9 +506,9 @@ public:
         {
             // --- MR transaction: cross-shard (local put + remote get) ---
 
-                int key_id = i % hot_keys; // induce contention on a small set of keys
       {
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true /*is_mr*/);
+                int key_id = i % hot_keys; // induce contention on a small set of keys
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT,true /*is_mr*/);
                 std::string key_local = "microbench_mr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(key_id);
                 std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
                 std::string value = mako::Encode("mr_val_" + std::to_string(i));
@@ -518,17 +518,18 @@ public:
                     std::string remote_val;
                     table->get(txn, key_remote, remote_val); // remote get
                     // add sleep
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
                     db->commit_txn(txn);
                     mr_commits++;
                 }
                 catch (abstract_db::abstract_abort_exception &ex)
                 {
+                    printf("abort called from simple transaction rep\n");
                     db->abort_txn(txn);
                     mr_aborts++;
                 }
             }
             { 
+                int key_id = i % hot_keys; // induce contention on a small set of keys
                 void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
                 std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
 
