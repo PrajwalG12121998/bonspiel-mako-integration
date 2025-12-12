@@ -1067,11 +1067,12 @@ protected:
           item.add_flags(TransItem::reserved_bit);
           return true;
       }
-  }while (vers != v2);
+    }
+    }while (vers != v2);
     
   return true;
-
   }
+  
 
   template <typename ValType>
   static void assign_val(ValType& val, const ValType& val_to_assign) {
