@@ -2923,7 +2923,7 @@ if (TThread::get_is_micro()) {
     //printf("[tpcc] Creating MR transaction (isRemote=true) in txn_payment()\n");
   }
   //PaymentTxnProfile profile;
-  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_PAYMENT, isRemote);
+  void *txn = db->new_txn(BenchmarkConfig::getInstance().getTxnFlags(), arena, txn_buf(), abstract_db::HINT_TPCC_PAYMENT, false);
   scoped_str_arena s_arena(arena);
 
   scoped_multilock<spinlock> mlock;

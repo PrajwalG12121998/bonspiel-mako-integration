@@ -18,6 +18,8 @@ using namespace std;
 using namespace mako;
 
 class TransactionWorker
+    // Microbenchmark: 15% MR transactions, highly contended with SR
+   
 {
 public:
     TransactionWorker(abstract_db *db, int worker_id = 0)
@@ -506,9 +508,9 @@ public:
         {
             // --- MR transaction: cross-shard (local put + remote get) ---
 
-      {
                 int key_id = i % hot_keys; // induce contention on a small set of keys
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT,true /*is_mr*/);
+      if(worker_id_==0 && worker_id_== 1){ // only worker 0 prints
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT,false /*is_mr*/);
                 std::string key_local = "microbench_mr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(key_id);
                 std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
                 std::string value = mako::Encode("mr_val_" + std::to_string(i));
@@ -517,7 +519,6 @@ public:
                     table->put(txn, key_local, value); // local put
                     std::string remote_val;
                     table->get(txn, key_remote, remote_val); // remote get
-                    // add sleep
                     db->commit_txn(txn);
                     mr_commits++;
                 }
@@ -529,7 +530,6 @@ public:
                 }
             }
             { 
-                int key_id = i % hot_keys; // induce contention on a small set of keys
                 void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
                 std::string key_remote = "microbench_mr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(key_id);
 
@@ -552,6 +552,120 @@ public:
         }
         printf("[MICROBENCH_MR_SR] SUMMARY: MR: %d commits, %d aborts | SR: %d commits, %d aborts\n",
                mr_commits, mr_aborts, sr_commits, sr_aborts);
+    }
+
+    void populate_keys(int num_txns = 1000) {
+        
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        int remote_shard_index = home_shard_index == 0 ? 1 : 0;
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        for (int i = 0; i < num_txns; ++i)
+        {
+            if(worker_id_== 0 && home_shard_index==0){ // only worker 0 prints{
+            void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false);
+            std::string key_local = "microbench_15pctmr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(i);
+            std::string key_remote = "microbench_15pctmr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(i);
+            std::string value = mako::Encode("mr_val_" + std::to_string(i));
+            // Print actual shard assignment for both keys
+            int shard_local = table->check_shard(lcdf::Str(key_local));
+            int shard_remote = table->check_shard(lcdf::Str(key_remote));
+            printf("[DEBUG] key_local=%s assigned_shard=%d | key_remote=%s assigned_shard=%d\n",
+                   key_local.c_str(), shard_local, key_remote.c_str(), shard_remote);
+            try {
+                table->put(txn, key_local, value);
+                table->put(txn, key_remote, value);
+                db->commit_txn(txn);
+            } catch (abstract_db::abstract_abort_exception &ex) {
+                db->abort_txn(txn);
+            }
+        }
+        }
+        // add sleep of two seconds here
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        printf("[DEBUG] Finished populating keys, proceeding to transactions...\n");
+    }
+
+
+     void microbench_15pct_mr_high_contention(int num_txns = 1000)
+    {
+        printf("\n[MICROBENCH_15PCT_MR] === Microbenchmark 15%% MR, High SR Contention (Thread:%ld) ===\n", std::this_thread::get_id());
+
+        int home_shard_index = BenchmarkConfig::getInstance().getShardIndex();
+        int remote_shard_index = home_shard_index == 0 ? 1 : 0;
+        mbta_sharded_ordered_index *table = db->open_sharded_index("customer_0");
+
+        // Find 4 hot local keys and 4 hot remote keys
+        std::vector<std::string> hot_local_keys;
+        std::vector<std::string> hot_remote_keys;
+        int max_hot = 4;
+        int i = 0;
+        // Try up to 1000 keys to find 4 local and 4 remote
+        for (; i < 1000 && (hot_local_keys.size() < max_hot || hot_remote_keys.size() < max_hot); ++i) {
+            std::string key_local = "microbench_15pctmr_local_" + std::to_string(home_shard_index) + "_" + std::to_string(i);
+            std::string key_remote = "microbench_15pctmr_remote_" + std::to_string(remote_shard_index) + "_" + std::to_string(i);
+            if (hot_local_keys.size() < max_hot && table->check_shard(lcdf::Str(key_local)) == home_shard_index) {
+                hot_local_keys.push_back(key_local);
+            }
+            if (hot_remote_keys.size() < max_hot && table->check_shard(lcdf::Str(key_remote)) == remote_shard_index) {
+                hot_remote_keys.push_back(key_remote);
+            }
+        }
+        if (hot_local_keys.size() < max_hot || hot_remote_keys.size() < max_hot) {
+            printf("[ERROR] Could not find enough hot local/remote keys! Found %zu local, %zu remote\n", hot_local_keys.size(), hot_remote_keys.size());
+            return;
+        }
+
+        int mr_commits = 0, mr_aborts = 0;
+        int sr_commits = 0, sr_aborts = 0;
+        uint64_t mr_latency_ns = 0, sr_latency_ns = 0;
+        for (int i = 0; i < num_txns; ++i)
+        {
+            double frac = (double)rand() / RAND_MAX;
+            if (frac < 0.10) {
+                // MR transaction: pick a hot remote and hot local key
+                int key_id = i % max_hot;
+                auto mr_start = std::chrono::high_resolution_clock::now();
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false/*is_mr*/);
+                std::string key_remote = hot_remote_keys[key_id];
+                std::string key_local = hot_local_keys[key_id];
+                std::string value = mako::Encode("mr_val_" + std::to_string(i));
+                try {
+                    table->put(txn, key_remote, value);
+                    std::string remote_val;
+                    table->get(txn, key_local, remote_val);
+                    db->commit_txn(txn);
+                    auto mr_end = std::chrono::high_resolution_clock::now();
+                    mr_latency_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(mr_end - mr_start).count();
+                    mr_commits++;
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    mr_aborts++;
+                }
+            } else {
+                // SR transaction: pick a hot local key
+                int key_id = i % max_hot;
+                auto sr_start = std::chrono::high_resolution_clock::now();
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false /*is_mr*/);
+                std::string key_local = hot_local_keys[key_id];
+                std::string value = mako::Encode("sr_val_" + std::to_string(i));
+                try {
+                    table->put(txn, key_local, value);
+                    db->commit_txn(txn);
+                    auto sr_end = std::chrono::high_resolution_clock::now();
+                    sr_latency_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(sr_end - sr_start).count();
+                    sr_commits++;
+                } catch (abstract_db::abstract_abort_exception &ex) {
+                    db->abort_txn(txn);
+                    sr_aborts++;
+                }
+            }
+        }
+        double avg_mr_latency_us = mr_commits > 0 ? (double)mr_latency_ns / mr_commits / 1000.0 : 0.0;
+        double avg_sr_latency_us = sr_commits > 0 ? (double)sr_latency_ns / sr_commits / 1000.0 : 0.0;
+        printf("[MICROBENCH_15PCT_MR] SUMMARY: MR: %d commits, %d aborts | SR: %d commits, %d aborts\n",
+            mr_commits, mr_aborts, sr_commits, sr_aborts);
+        printf("[MICROBENCH_15PCT_MR] AVG LATENCY: MR: %.2f us | SR: %.2f us\n", avg_mr_latency_us, avg_sr_latency_us);
     }
 
 protected:
@@ -583,7 +697,9 @@ void run_worker_tests(abstract_db *db, int worker_id,
     // worker->test_overlapping_keys();
     // worker->test_cross_shard_contention();
     // worker->test_read_write_contention();
-    worker->microbench_mr_sr_abort(1000);
+    // worker->microbench_mr_sr_abort(1000);
+    worker->populate_keys(500);
+    worker->microbench_15pct_mr_high_contention(500);
 
     printf("[Worker %d] Completed\n", worker_id);
 }

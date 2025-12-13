@@ -348,7 +348,7 @@ bool Transaction::shard_try_lock_last_writeset()
                 if (result == 2)
                 {
                     // Reserved by MR transaction - SR cannot proceed
-                    printf("SR_ABORT* SR transaction aborted New: because MR reserved the record %d\n", TThread::id());
+                    printf(" SR transaction aborted because MR reserved the record \n");
                     return false;
                 }
                 if (result != 0)

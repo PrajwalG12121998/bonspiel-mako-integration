@@ -1028,81 +1028,81 @@ protected:
   //   return true;
   // }
 
-  // static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
-  //   while (true) {
-  //     Version v_before = e->version();
-  //     if (is_locked(v_before)) {
-  //       printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
-  //       Sto::abort_without_throw();
-  //       TThread::transget_without_throw = true;
-  //       return false;
-  //     }
-  //     // Only reserve if not already reserved by this transaction
-  //     if (!item.has_flag(TransItem::reserved_bit)) {
-  //       // Try to reserve with timeout (to avoid spinning forever)
-  //       TransactionTid::reserve(e->version());
-  //       item.add_flags(TransItem::reserved_bit);
-  //     }
-  //     fence();
-  //     assign_val(val, e->read_value());
-  //     fence();
-  //     Version v_after = e->version();
-  //     fence();
-  //     // Check that only the reservation bits may have changed
-  //     // Version mask = ~(TransactionTid::reservation_mask);
-  //     if (TransactionTid::check_if_equal(v_before, v_after)) {
-  //       vers = v_after;
-  //       return true;
-  //     } else {
-  //       // Version changed (not just reservation bits): unreserve and retry
-  //       if (item.has_flag(TransItem::reserved_bit)) {
-  //         TransactionTid::unreserve(e->version());
-  //         item.remove_reserve();
-  //       }
-  //       // retry
-  //     }
-  //   }
-  //   // unreachable
-  //   return false;
-  // }
   static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
     while (true) {
-        Version v_before = e->version();
-        if (is_locked(v_before)) {
-            printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
-            Sto::abort_without_throw();
-            TThread::transget_without_throw = true;
-            return false;
+      Version v_before = e->version();
+      if (is_locked(v_before)) {
+        printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
+        Sto::abort_without_throw();
+        TThread::transget_without_throw = true;
+        return false;
+      }
+      // Only reserve if not already reserved by this transaction
+      if (!item.has_flag(TransItem::reserved_bit)) {
+        // Try to reserve with timeout (to avoid spinning forever)
+        TransactionTid::reserve(e->version());
+        item.add_flags(TransItem::reserved_bit);
+      }
+      fence();
+      assign_val(val, e->read_value());
+      fence();
+      Version v_after = e->version();
+      fence();
+      // Check that only the reservation bits may have changed
+      // Version mask = ~(TransactionTid::reservation_mask);
+      if (TransactionTid::check_if_equal(v_before, v_after)) {
+        vers = v_after;
+        return true;
+      } else {
+        // Version changed (not just reservation bits): unreserve and retry
+        if (item.has_flag(TransItem::reserved_bit)) {
+          TransactionTid::unreserve(e->version());
+          item.remove_reserve();
         }
-        fence();
-        assign_val(val, e->read_value());
-        fence();
-        Version v_after = e->version();
-        fence();
-        if (v_before != v_after) {
-            // Version changed, retry
-            continue;
-        }
-        // Now try to reserve, but only if not already reserved by this txn
-        if (!item.has_flag(TransItem::reserved_bit)) {
-            TransactionTid::reserve(e->version());
-            item.add_flags(TransItem::reserved_bit);
-        }
-        // After reserving, check version again to ensure it didn't change (except reservation bits)
-        Version v_final = e->version();
-        if (TransactionTid::check_if_equal(v_before, v_final)) {
-            vers = v_final;
-            return true;
-        } else {
-          // we allow some race
-            vers = v_final;
-            // retry
-            return true;
-        }
+        // retry
+      }
     }
     // unreachable
     return false;
-}
+  }
+//   static bool atomicReadWithReserve(versioned_value *e, Version& vers, value_type& val, TransProxy& item) {
+//     while (true) {
+//         Version v_before = e->version();
+//         if (is_locked(v_before)) {
+//             printf("[MassTrans::atomicReadWithReserve] ABORT - found locked version: 0x%lx\n", (unsigned long)v_before);
+//             Sto::abort_without_throw();
+//             TThread::transget_without_throw = true;
+//             return false;
+//         }
+//         fence();
+//         assign_val(val, e->read_value());
+//         fence();
+//         Version v_after = e->version();
+//         fence();
+//         if (v_before != v_after) {
+//             // Version changed, retry
+//             continue;
+//         }
+//         // Now try to reserve, but only if not already reserved by this txn
+//         if (!item.has_flag(TransItem::reserved_bit)) {
+//             TransactionTid::reserve(e->version());
+//             item.add_flags(TransItem::reserved_bit);
+//         }
+//         // After reserving, check version again to ensure it didn't change (except reservation bits)
+//         Version v_final = e->version();
+//         if (TransactionTid::check_if_equal(v_before, v_final)) {
+//             vers = v_final;
+//             return true;
+//         } else {
+//           // we allow some race
+//             vers = v_final;
+//             // retry
+//             return true;
+//         }
+//     }
+//     // unreachable
+//     return false;
+// }
   
 
   template <typename ValType>
