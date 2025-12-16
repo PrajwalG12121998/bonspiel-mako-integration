@@ -1,4 +1,4 @@
-# README: Running Microbenchmarks in simpleTransactionRep.cc
+# Running Microbenchmarks in simpleTransactionRep.cc
 
 This guide explains how to run two microbenchmark functions from `simpleTransactionRep.cc`:
 
@@ -87,6 +87,8 @@ void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true/*is
 Then rebuild and run:
 ```bash
 make -j16
+./build/simpleTransactionRep 2 0 16 localhost 0 2>&1 | tee /tmp/shard0.log
+./build/simpleTransactionRep 2 1 16 localhost 0 2>&1 | tee /tmp/shard1.log
 ```
 
 ---
