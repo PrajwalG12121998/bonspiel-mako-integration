@@ -627,7 +627,7 @@ public:
                 // MR transaction: pick a hot remote and hot local key
                 int key_id = i % max_hot;
                 auto mr_start = std::chrono::high_resolution_clock::now();
-                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, true/*is_mr*/);
+                void *txn = db->new_txn(0, arena, txn_buf(), abstract_db::HINT_DEFAULT, false/*is_mr*/);
                 std::string key_remote = hot_remote_keys[key_id];
                 std::string key_local = hot_local_keys[key_id];
                 std::string value = mako::Encode("mr_val_" + std::to_string(i));
@@ -819,7 +819,8 @@ void run_worker_tests(abstract_db *db, int worker_id,
     // worker->test_read_write_contention();
     // worker->microbench_mr_sr_abort(1000);
     worker->populate_keys(1000);
-    worker->microbench_15pct_mr_high_contention_with_retry_and_percentiles(1000);
+    worker->microbench_15pct_mr_high_contention(1000);
+    //worker->microbench_15pct_mr_high_contention_with_retry_and_percentiles(1000);
 
     printf("[Worker %d] Completed\n", worker_id);
 }
