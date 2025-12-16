@@ -65,7 +65,7 @@ Open **two terminals** and run the following commands:
 ### Step 5: Check Latency Results
 
 ```bash
-grep P999 /tmp/shard0.log
+grep SUMMARY /tmp/shard0.log
 ```
 
 ---
